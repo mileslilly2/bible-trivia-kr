@@ -1,0 +1,3 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix : <http://example.org/bible#> .
+:NoDivineIdentityWithMedium a sh:NodeShape ; sh:message "Divine agent cannot be identical with appearance medium." .

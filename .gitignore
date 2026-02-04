@@ -1,0 +1,36 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+
+# ---- Virtual environments ----
+.venv/
+venv/
+ENV/
+env/
+
+# ---- Editor / OS junk ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---- Generated outputs ----
+out/
+out_example/
+
+# ---- Neo4j ----
+neo4j_data/
+
+# ---- Logs ----
+*.log
+
+# ---- Misc ----
+*.egg-info/
+dist/
+build/

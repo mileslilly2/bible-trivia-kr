@@ -1,0 +1,15 @@
+// Inference rules (demo)
+.decl begat(father:symbol, child:symbol)
+.decl father_of(father:symbol, child:symbol)
+.decl ancestor_of(ancestor:symbol, descendant:symbol)
+father_of(F, C) :- begat(F, C).
+ancestor_of(A, D) :- father_of(A, D).
+ancestor_of(A, D) :- father_of(A, X), ancestor_of(X, D).
+
+.decl event(eid:symbol)
+.decl event_type(eid:symbol, t:symbol)
+.decl agent(eid:symbol, a:symbol)
+.decl recipient(eid:symbol, r:symbol)
+.decl medium(eid:symbol, m:symbol)
+
+.decl metaphor(mid:symbol, source:symbol, vehicle:symbol)
