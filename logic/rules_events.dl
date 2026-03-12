@@ -1,0 +1,44 @@
+// ---------------------------------
+// Event / interaction inference
+// ---------------------------------
+
+.decl died(person:symbol)
+.decl killer_of(killer:symbol, victim:symbol)
+.decl victim_of(victim:symbol, killer:symbol)
+.decl hostile_relation(x:symbol, y:symbol)
+.decl interacted_with(x:symbol, y:symbol)
+.decl encountered(x:symbol, y:symbol)
+
+died(X) :-
+    killed(_, X).
+
+killer_of(K, V) :-
+    killed(K, V).
+
+victim_of(V, K) :-
+    killed(K, V).
+
+hostile_relation(X, Y) :-
+    killed(X, Y).
+
+interacted_with(X, Y) :-
+    spoke_to(X, Y).
+
+interacted_with(X, Y) :-
+    killed(X, Y).
+
+interacted_with(X, Y) :-
+    appeared_to(X, Y).
+
+encountered(X, Y) :-
+    appeared_to(X, Y).
+
+encountered(X, Y) :-
+    spoke_to(X, Y).
+
+.output died
+.output killer_of
+.output victim_of
+.output hostile_relation
+.output interacted_with
+.output encountered

@@ -1,0 +1,26 @@
+// ---------------------------------
+// Theophany / manifestation inference
+// ---------------------------------
+
+.decl divine_encounter(entity:symbol, person:symbol)
+.decl manifested_to(entity:symbol, person:symbol, form:symbol)
+.decl manifesting_entity(entity:symbol)
+.decl manifestation_form_used(entity:symbol, form:symbol)
+
+divine_encounter(E, P) :-
+    appeared_to(E, P).
+
+manifesting_entity(E) :-
+    manifestation(E, _).
+
+manifestation_form_used(E, F) :-
+    manifestation(E, F).
+
+manifested_to(E, P, F) :-
+    appeared_to(E, P),
+    manifestation(E, F).
+
+.output divine_encounter
+.output manifested_to
+.output manifesting_entity
+.output manifestation_form_used

@@ -1,0 +1,30 @@
+// ---------------------------------
+// Dialogue inference
+// ---------------------------------
+
+.decl spoke_with(x:symbol, y:symbol)
+.decl mutual_dialogue(x:symbol, y:symbol)
+.decl frequent_dialogue_partner(x:symbol, y:symbol)
+.decl addressed(x:symbol, y:symbol)
+
+spoke_with(X, Y) :-
+    spoke_to(X, Y).
+
+spoke_with(X, Y) :-
+    spoke_to(Y, X).
+
+mutual_dialogue(X, Y) :-
+    spoke_to(X, Y),
+    spoke_to(Y, X).
+
+addressed(X, Y) :-
+    spoke_to(X, Y).
+
+// soft "partner" notion: any mutual dialogue counts
+frequent_dialogue_partner(X, Y) :-
+    mutual_dialogue(X, Y).
+
+.output spoke_with
+.output mutual_dialogue
+.output addressed
+.output frequent_dialogue_partner

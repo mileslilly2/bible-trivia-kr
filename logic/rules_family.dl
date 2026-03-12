@@ -1,0 +1,70 @@
+// ---------------------------------
+// Family inference
+// ---------------------------------
+
+.decl father_of(father:symbol, child:symbol)
+.decl mother_of(mother:symbol, child:symbol)
+.decl grandparent_of(grandparent:symbol, grandchild:symbol)
+.decl ancestor_of(ancestor:symbol, descendant:symbol)
+.decl descendant_of(descendant:symbol, ancestor:symbol)
+.decl sibling_of(x:symbol, y:symbol)
+.decl brother_of(x:symbol, y:symbol)
+.decl sister_of(x:symbol, y:symbol)
+.decl child_of(child:symbol, parent:symbol)
+.decl family_related(x:symbol, y:symbol)
+
+father_of(P, C) :-
+    parent_of(P, C),
+    parent_gender(P, "male").
+
+mother_of(P, C) :-
+    parent_of(P, C),
+    parent_gender(P, "female").
+
+child_of(C, P) :-
+    parent_of(P, C).
+
+grandparent_of(X, Z) :-
+    parent_of(X, Y),
+    parent_of(Y, Z).
+
+ancestor_of(X, Y) :-
+    parent_of(X, Y).
+
+ancestor_of(X, Z) :-
+    parent_of(X, Y),
+    ancestor_of(Y, Z).
+
+descendant_of(X, Y) :-
+    ancestor_of(Y, X).
+
+sibling_of(X, Y) :-
+    parent_of(P, X),
+    parent_of(P, Y),
+    X != Y.
+
+brother_of(X, Y) :-
+    sibling_of(X, Y),
+    father_of(_, X).   // placeholder heuristic
+
+sister_of(X, Y) :-
+    sibling_of(X, Y),
+    mother_of(_, X).   // placeholder heuristic
+
+family_related(X, Y) :-
+    parent_of(X, Y).
+
+family_related(X, Y) :-
+    parent_of(Y, X).
+
+family_related(X, Y) :-
+    sibling_of(X, Y).
+
+.output father_of
+.output mother_of
+.output grandparent_of
+.output ancestor_of
+.output descendant_of
+.output sibling_of
+.output child_of
+.output family_related

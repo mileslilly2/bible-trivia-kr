@@ -1,0 +1,36 @@
+// ---------------------------------
+// Travel inference
+// ---------------------------------
+
+.decl visited(person:symbol, place:symbol)
+.decl departed_from(person:symbol, place:symbol)
+.decl route(person:symbol, source:symbol, destination:symbol)
+.decl traveled_somewhere(person:symbol)
+.decl reached(person:symbol, place:symbol)
+
+visited(P, D) :-
+    traveled_to(P, D).
+
+visited(P, D) :-
+    traveled_from_to(P, _, D).
+
+departed_from(P, S) :-
+    traveled_from_to(P, S, _).
+
+route(P, S, D) :-
+    traveled_from_to(P, S, D).
+
+traveled_somewhere(P) :-
+    traveled_to(P, _).
+
+traveled_somewhere(P) :-
+    traveled_from_to(P, _, _).
+
+reached(P, D) :-
+    traveled_to(P, D).
+
+.output visited
+.output departed_from
+.output route
+.output traveled_somewhere
+.output reached

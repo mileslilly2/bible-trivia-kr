@@ -1,0 +1,36 @@
+// ---------------------------------
+// Role / office inference
+// ---------------------------------
+
+.decl king_of(person:symbol, realm:symbol)
+.decl ruler_of(person:symbol, realm:symbol)
+.decl prophet(person:symbol)
+.decl priest(person:symbol)
+.decl king(person:symbol)
+.decl office_holder(person:symbol, office:symbol)
+
+king(X) :-
+    role(X, "king").
+
+prophet(X) :-
+    role(X, "prophet").
+
+priest(X) :-
+    role(X, "priest").
+
+office_holder(X, R) :-
+    role(X, R).
+
+king_of(X, Realm) :-
+    role(X, "king"),
+    reign_realm(X, Realm).
+
+ruler_of(X, Realm) :-
+    king_of(X, Realm).
+
+.output king
+.output prophet
+.output priest
+.output office_holder
+.output king_of
+.output ruler_of
