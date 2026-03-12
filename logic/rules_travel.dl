@@ -1,36 +1,18 @@
-// ---------------------------------
-// Travel inference
-// ---------------------------------
+event_type(Eid, "travel") :-
+    event_type(Eid, "went").
 
-.decl visited(person:symbol, place:symbol)
-.decl departed_from(person:symbol, place:symbol)
-.decl route(person:symbol, source:symbol, destination:symbol)
-.decl traveled_somewhere(person:symbol)
-.decl reached(person:symbol, place:symbol)
+event_type(Eid, "travel") :-
+    event_type(Eid, "journeyed").
 
-visited(P, D) :-
-    traveled_to(P, D).
+event_type(Eid, "travel") :-
+    event_type(Eid, "traveled").
 
-visited(P, D) :-
-    traveled_from_to(P, _, D).
+event_type(Eid, "travel") :-
+    event_type(Eid, "came").
 
-departed_from(P, S) :-
-    traveled_from_to(P, S, _).
+event_type(Eid, "visitation") :-
+    event_type(Eid, "visit").
 
-route(P, S, D) :-
-    traveled_from_to(P, S, D).
-
-traveled_somewhere(P) :-
-    traveled_to(P, _).
-
-traveled_somewhere(P) :-
-    traveled_from_to(P, _, _).
-
-reached(P, D) :-
-    traveled_to(P, D).
-
-.output visited
-.output departed_from
-.output route
-.output traveled_somewhere
-.output reached
+event_type(Eid, "visitation") :-
+    event_type(Eid, "travel"),
+    recipient(Eid, _).

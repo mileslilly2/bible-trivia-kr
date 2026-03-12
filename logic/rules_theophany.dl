@@ -1,26 +1,23 @@
-// ---------------------------------
-// Theophany / manifestation inference
-// ---------------------------------
+event_type(Eid, "theophany") :-
+    event_type(Eid, "appearance"),
+    agent(Eid, "God").
 
-.decl divine_encounter(entity:symbol, person:symbol)
-.decl manifested_to(entity:symbol, person:symbol, form:symbol)
-.decl manifesting_entity(entity:symbol)
-.decl manifestation_form_used(entity:symbol, form:symbol)
+event_type(Eid, "theophany") :-
+    event_type(Eid, "appearance"),
+    agent(Eid, "Yahweh").
 
-divine_encounter(E, P) :-
-    appeared_to(E, P).
+event_type(Eid, "theophany") :-
+    event_type(Eid, "appearance"),
+    agent(Eid, "LORD").
 
-manifesting_entity(E) :-
-    manifestation(E, _).
+event_type(Eid, "divine_speech") :-
+    event_type(Eid, "speech"),
+    agent(Eid, "God").
 
-manifestation_form_used(E, F) :-
-    manifestation(E, F).
+event_type(Eid, "divine_speech") :-
+    event_type(Eid, "speech"),
+    agent(Eid, "Yahweh").
 
-manifested_to(E, P, F) :-
-    appeared_to(E, P),
-    manifestation(E, F).
-
-.output divine_encounter
-.output manifested_to
-.output manifesting_entity
-.output manifestation_form_used
+event_type(Eid, "divine_speech") :-
+    event_type(Eid, "speech"),
+    agent(Eid, "LORD").

@@ -1,0 +1,19 @@
+event_type(Eid, "arrival") :-
+    event_type(Eid, "travel"),
+    recipient(Eid, _).
+
+event_type(Eid, "presence") :-
+    event_type(Eid, "arrival").
+
+event_type(Eid, "presence") :-
+    event_type(Eid, "dwell"),
+    recipient(Eid, _).
+
+event_type(Eid, "presence") :-
+    event_type(Eid, "stay"),
+    recipient(Eid, _).
+
+event_type(Eid, "gathering") :-
+    event_type(Eid, "presence"),
+    agent(Eid, _),
+    recipient(Eid, _).

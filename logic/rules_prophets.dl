@@ -1,0 +1,15 @@
+event_type(Eid, "prophetic_speech") :-
+    event_type(Eid, "oracle").
+
+event_type(Eid, "prophetic_speech") :-
+    event_type(Eid, "prophecy").
+
+event_type(Eid, "prophetic_speech") :-
+    event_type(Eid, "vision").
+
+event_type(Eid, "prophetic_speech") :-
+    event_type(Eid, "dream").
+
+event_type(Eid, "prophetic_encounter") :-
+    event_type(Eid, "prophetic_speech"),
+    recipient(Eid, _).

@@ -1,0 +1,22 @@
+// schema.dl
+
+// genealogy
+.decl begat(father:symbol, child:symbol)
+.decl father(father:symbol, child:symbol)
+.decl ancestor_of(ancestor:symbol, descendant:symbol)
+
+// events
+.decl event(eid:symbol)
+.decl event_type(eid:symbol, t:symbol)
+.decl agent(eid:symbol, a:symbol)
+.decl recipient(eid:symbol, r:symbol)
+
+// dialogue
+.decl said(speaker:symbol, listener:symbol, message:symbol)
+
+// outputs
+.output father
+.output ancestor_of
+.output event_type
+.output agent
+.output recipient

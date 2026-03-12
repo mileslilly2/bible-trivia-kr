@@ -1,36 +1,17 @@
-// ---------------------------------
-// Role / office inference
-// ---------------------------------
+event_type(Eid, "royal_action") :-
+    event_type(Eid, "reign").
 
-.decl king_of(person:symbol, realm:symbol)
-.decl ruler_of(person:symbol, realm:symbol)
-.decl prophet(person:symbol)
-.decl priest(person:symbol)
-.decl king(person:symbol)
-.decl office_holder(person:symbol, office:symbol)
+event_type(Eid, "royal_action") :-
+    event_type(Eid, "anoint").
 
-king(X) :-
-    role(X, "king").
+event_type(Eid, "priestly_action") :-
+    event_type(Eid, "sacrifice").
 
-prophet(X) :-
-    role(X, "prophet").
+event_type(Eid, "priestly_action") :-
+    event_type(Eid, "bless").
 
-priest(X) :-
-    role(X, "priest").
+event_type(Eid, "office_action") :-
+    event_type(Eid, "royal_action").
 
-office_holder(X, R) :-
-    role(X, R).
-
-king_of(X, Realm) :-
-    role(X, "king"),
-    reign_realm(X, Realm).
-
-ruler_of(X, Realm) :-
-    king_of(X, Realm).
-
-.output king
-.output prophet
-.output priest
-.output office_holder
-.output king_of
-.output ruler_of
+event_type(Eid, "office_action") :-
+    event_type(Eid, "priestly_action").
