@@ -1,10 +1,11 @@
+from pathlib import Path
+import sys
 import os
 import json
-import sys
 from typing import Any, Dict, Iterator, Optional, Tuple, List
 
-from ingest.parse_verse import main as parse_main
-
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 DIVINE_IDS = {"God", "Yahweh", "LORD"}
 
@@ -22,6 +23,7 @@ def j(s: Any) -> str:
         return json.dumps("", ensure_ascii=False)
     return json.dumps(str(s), ensure_ascii=False)
 
+
 def safe_loads(line: str) -> Optional[Dict[str, Any]]:
     line = line.strip()
     if not line:
@@ -31,8 +33,10 @@ def safe_loads(line: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+
 def ref_key(ref: str) -> str:
     return ref.replace(" ", "_").replace(":", "_")
+
 
 def iter_jsonl(path: str) -> Iterator[Tuple[int, Dict[str, Any]]]:
     with open(path, "r", encoding="utf-8") as f:
@@ -43,13 +47,16 @@ def iter_jsonl(path: str) -> Iterator[Tuple[int, Dict[str, Any]]]:
             if isinstance(rec, dict):
                 yield i, rec
 
+
 def ensure_dir_for(path: str) -> None:
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
 
+
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
+
 
 def write_jsonl(path: str, records: Iterator[Dict[str, Any]]) -> int:
     ensure_dir_for(path)
@@ -67,118 +74,129 @@ def write_jsonl(path: str, records: Iterator[Dict[str, Any]]) -> int:
 
 def gen_logic(parsed_path: str, out_facts: str, rules_src: str, rules_dst: str) -> None:
     """
-    Convert parsed KR records into a fact file. This function is schema-defensive:
-    - genealogy supports father/mother/parent roles
-    - events emit generic event_arg(e,k,v) so adding keys won't break logic
-    - metaphors tolerate missing source/vehicle and still emit metaphor_arg(...)
+    Convert normalized extracted facts into a Soufflé-style fact file.
+    Supports:
+      - parent_of
+      - rename
+      - killed
+      - spoke_to
+      - traveled
+      - role
+      - appeared_to
+      - manifestation
     """
 
     lines: List[str] = [
         "// Generated facts (robot)\n",
-        # Legacy demo predicates (kept for compatibility)
-        ".decl begat(father:symbol, child:symbol)\n",
-        ".decl bore(mother:symbol, child:symbol)\n",
-        # Normalized parent model (recommended)
         ".decl parent_of(parent:symbol, child:symbol)\n",
-        ".decl parent_role(parent:symbol, role:symbol)\n",
-        # Events
-        ".decl event(eid:symbol)\n",
-        ".decl event_type(eid:symbol, t:symbol)\n",
-        ".decl agent(eid:symbol, a:symbol)\n",
-        ".decl recipient(eid:symbol, r:symbol)\n",
-        ".decl medium(eid:symbol, m:symbol)\n",
-        ".decl event_arg(eid:symbol, k:symbol, v:symbol)\n",
-        # Metaphors
-        ".decl metaphor(mid:symbol, source:symbol, vehicle:symbol)\n",
-        ".decl metaphor_arg(mid:symbol, k:symbol, v:symbol)\n\n",
+        ".decl parent_gender(parent:symbol, gender:symbol)\n",
+        ".decl renamed_to(ref:symbol, name:symbol)\n",
+        ".decl killed(killer:symbol, victim:symbol)\n",
+        ".decl spoke_to(speaker:symbol, listener:symbol)\n",
+        ".decl traveled_to(traveler:symbol, destination:symbol)\n",
+        ".decl traveled_from_to(traveler:symbol, source:symbol, destination:symbol)\n",
+        ".decl role(person:symbol, role:symbol)\n",
+        ".decl reign_realm(person:symbol, realm:symbol)\n",
+        ".decl appeared_to(entity:symbol, recipient:symbol)\n",
+        ".decl manifestation(entity:symbol, form:symbol)\n",
+        ".decl fact_ref(kind:symbol, a:symbol, b:symbol, ref:symbol)\n",
+        "\n",
     ]
 
-    eid = 0
-    mid = 0
-    counts = {"genealogy": 0, "event": 0, "metaphor": 0, "other": 0}
+    counts = {
+        "parent_of": 0,
+        "rename": 0,
+        "killed": 0,
+        "spoke_to": 0,
+        "traveled": 0,
+        "role": 0,
+        "appeared_to": 0,
+        "manifestation": 0,
+        "other": 0,
+    }
 
     for _, rec in iter_jsonl(parsed_path):
-        kind = rec.get("kind")
+        ftype = rec.get("type")
         ref = rec.get("ref", "UNKNOWN")
-        kref = ref_key(ref)
-        args = rec.get("args") or {}
 
-        if kind == "genealogy":
-            counts["genealogy"] += 1
-            child = args.get("child")
-            father = args.get("father")
-            mother = args.get("mother")
-            parent = args.get("parent")
-            role = args.get("role")
-
-            if father and child:
-                lines.append(f"begat({j(father)}, {j(child)}).\n")
-                lines.append(f"parent_of({j(father)}, {j(child)}).\n")
-                lines.append(f"parent_role({j(father)}, {j('father')}).\n")
-
-            if mother and child:
-                lines.append(f"bore({j(mother)}, {j(child)}).\n")
-                lines.append(f"parent_of({j(mother)}, {j(child)}).\n")
-                lines.append(f"parent_role({j(mother)}, {j('mother')}).\n")
-
+        if ftype == "parent_of":
+            counts["parent_of"] += 1
+            parent = rec.get("parent")
+            child = rec.get("child")
+            gender = rec.get("parent_gender")
             if parent and child:
                 lines.append(f"parent_of({j(parent)}, {j(child)}).\n")
-                if role:
-                    lines.append(f"parent_role({j(parent)}, {j(role)}).\n")
-
+                lines.append(f"fact_ref({j('parent_of')}, {j(parent)}, {j(child)}, {j(ref)}).\n")
+            if parent and gender:
+                lines.append(f"parent_gender({j(parent)}, {j(gender)}).\n")
             continue
 
-        if kind == "event":
-            counts["event"] += 1
-            eid += 1
-            e = f"e{eid}_{kref}"
-            et = rec.get("event_type") or "Event"
-
-            lines.append(f"event({j(e)}).\n")
-            lines.append(f"event_type({j(e)}, {j(et)}).\n")
-
-            # Prefer explicit agent; fall back to speaker/who
-            a = args.get("agent") or args.get("speaker") or args.get("who")
-            r = args.get("recipient")
-            m = args.get("medium") or args.get("form")
-
-            if a:
-                lines.append(f"agent({j(e)}, {j(a)}).\n")
-            if r:
-                lines.append(f"recipient({j(e)}, {j(r)}).\n")
-            if m:
-                lines.append(f"medium({j(e)}, {j(m)}).\n")
-
-            # Generic args: adding new fields won't break the logic stage
-            for k, v in args.items():
-                if v is None:
-                    continue
-                lines.append(f"event_arg({j(e)}, {j(k)}, {j(v)}).\n")
-
+        if ftype == "rename":
+            counts["rename"] += 1
+            name = rec.get("name")
+            if name:
+                lines.append(f"renamed_to({j(ref)}, {j(name)}).\n")
+                lines.append(f"fact_ref({j('rename')}, {j(ref)}, {j(name)}, {j(ref)}).\n")
             continue
 
-        if kind == "metaphor":
-            counts["metaphor"] += 1
-            mid += 1
-            m_id = f"m{mid}_{kref}"
+        if ftype == "killed":
+            counts["killed"] += 1
+            killer = rec.get("killer")
+            victim = rec.get("victim")
+            if killer and victim:
+                lines.append(f"killed({j(killer)}, {j(victim)}).\n")
+                lines.append(f"fact_ref({j('killed')}, {j(killer)}, {j(victim)}, {j(ref)}).\n")
+            continue
 
-            source = args.get("source")
-            vehicle = args.get("vehicle")
+        if ftype == "spoke_to":
+            counts["spoke_to"] += 1
+            speaker = rec.get("speaker")
+            listener = rec.get("listener")
+            if speaker and listener:
+                lines.append(f"spoke_to({j(speaker)}, {j(listener)}).\n")
+                lines.append(f"fact_ref({j('spoke_to')}, {j(speaker)}, {j(listener)}, {j(ref)}).\n")
+            continue
 
-            # Only emit the core triple when vehicle exists; tolerate missing source.
-            if vehicle:
-                lines.append(f"metaphor({j(m_id)}, {j(source or 'UNKNOWN')}, {j(vehicle)}).\n")
+        if ftype == "traveled":
+            counts["traveled"] += 1
+            traveler = rec.get("traveler")
+            source = rec.get("source")
+            destination = rec.get("destination")
+            if traveler and destination:
+                lines.append(f"traveled_to({j(traveler)}, {j(destination)}).\n")
+                lines.append(f"fact_ref({j('traveled_to')}, {j(traveler)}, {j(destination)}, {j(ref)}).\n")
+            if traveler and source and destination:
+                lines.append(f"traveled_from_to({j(traveler)}, {j(source)}, {j(destination)}).\n")
+            continue
 
-            # Always emit metadata/args
-            mtype = rec.get("metaphor_type")
-            if mtype:
-                lines.append(f"metaphor_arg({j(m_id)}, {j('metaphor_type')}, {j(mtype)}).\n")
+        if ftype == "role":
+            counts["role"] += 1
+            person = rec.get("person")
+            role_name = rec.get("role")
+            realm = rec.get("realm")
+            if person and role_name:
+                lines.append(f"role({j(person)}, {j(role_name)}).\n")
+                lines.append(f"fact_ref({j('role')}, {j(person)}, {j(role_name)}, {j(ref)}).\n")
+            if person and realm:
+                lines.append(f"reign_realm({j(person)}, {j(realm)}).\n")
+            continue
 
-            for k, v in args.items():
-                if v is None:
-                    continue
-                lines.append(f"metaphor_arg({j(m_id)}, {j(k)}, {j(v)}).\n")
+        if ftype == "appeared_to":
+            counts["appeared_to"] += 1
+            entity = rec.get("entity")
+            recipient = rec.get("recipient")
+            if entity and recipient:
+                lines.append(f"appeared_to({j(entity)}, {j(recipient)}).\n")
+                lines.append(f"fact_ref({j('appeared_to')}, {j(entity)}, {j(recipient)}, {j(ref)}).\n")
+            continue
 
+        if ftype == "manifestation":
+            counts["manifestation"] += 1
+            entity = rec.get("entity")
+            form = rec.get("form")
+            if entity and form:
+                lines.append(f"manifestation({j(entity)}, {j(form)}).\n")
+                lines.append(f"fact_ref({j('manifestation')}, {j(entity)}, {j(form)}, {j(ref)}).\n")
             continue
 
         counts["other"] += 1
@@ -200,10 +218,17 @@ def gen_logic(parsed_path: str, out_facts: str, rules_src: str, rules_dst: str) 
 
 def gen_graph_cypher(parsed_path: str, verses_path: str, out_cypher: str) -> None:
     """
-    Convert parsed KR to a Neo4j load.cypher file. Schema-defensive:
-    - genealogy supports mother/father
-    - events can use agent/speaker/who
-    - metaphors tolerate missing source
+    Convert normalized extracted facts into a Neo4j load.cypher file.
+
+    Supported fact types:
+      - parent_of
+      - rename
+      - killed
+      - spoke_to
+      - traveled
+      - role
+      - appeared_to
+      - manifestation
     """
 
     verse_text: Dict[str, str] = {}
@@ -216,184 +241,254 @@ def gen_graph_cypher(parsed_path: str, verses_path: str, out_cypher: str) -> Non
     stmts: List[str] = [
         "// Generated load.cypher (robot)\n",
         "MERGE (:DivineEntity {id:'God'});\n",
+        "MERGE (:DivineEntity {id:'Yahweh'});\n",
+        "MERGE (:DivineEntity {id:'LORD'});\n",
     ]
 
     humans = set()
     places = set()
-    phenomena = set()
-    vehicles = set()
+    roles = set()
+    names = set()
+    forms = set()
 
-    events: List[Dict[str, Any]] = []
-    metaphors: List[Dict[str, Any]] = []
-    parent_edges: List[Tuple[str, str, str]] = []  # (parent, child, role)
-
-    eid = 0
-    mid = 0
+    parent_edges: List[Tuple[str, str, str, str]] = []
+    kill_edges: List[Tuple[str, str, str]] = []
+    speech_edges: List[Tuple[str, str, str]] = []
+    travel_edges: List[Tuple[str, Optional[str], str, str]] = []
+    role_edges: List[Tuple[str, str, Optional[str], str]] = []
+    rename_facts: List[Tuple[str, str]] = []
+    appearance_edges: List[Tuple[str, str, str]] = []
+    manifestation_edges: List[Tuple[str, str, str]] = []
 
     for _, rec in iter_jsonl(parsed_path):
-        kind = rec.get("kind")
+        ftype = rec.get("type")
         ref = rec.get("ref", "UNKNOWN")
-        args = rec.get("args") or {}
 
-        if kind == "genealogy":
-            child = args.get("child")
-            father = args.get("father")
-            mother = args.get("mother")
-
-            if father and child:
-                humans.add(father); humans.add(child)
-                parent_edges.append((father, child, "father"))
-            if mother and child:
-                humans.add(mother); humans.add(child)
-                parent_edges.append((mother, child, "mother"))
+        if ftype == "parent_of":
+            parent = rec.get("parent")
+            child = rec.get("child")
+            gender = rec.get("parent_gender")
+            if parent and child:
+                humans.add(parent)
+                humans.add(child)
+                parent_edges.append((parent, child, gender or "", ref))
             continue
 
-        if kind == "event":
-            eid += 1
-            ev_id = f"E{eid}"
-            et = rec.get("event_type") or "Event"
-
-            agent = args.get("agent") or args.get("speaker") or args.get("who")
-            recipient = args.get("recipient")
-
-            if recipient and recipient not in DIVINE_IDS:
-                humans.add(recipient)
-
-            if agent and agent not in DIVINE_IDS:
-                humans.add(agent)
-
-            where = args.get("where")
-            if where:
-                places.add(where)
-
-            med = args.get("medium") or args.get("form")
-            if med:
-                phenomena.add(med)
-
-            events.append({
-                "id": ev_id,
-                "type": et,
-                "ref": ref,
-                "text": verse_text.get(ref, rec.get("evidence", "")),
-                "args": args,
-            })
+        if ftype == "rename":
+            name = rec.get("name")
+            if name:
+                names.add(name)
+                rename_facts.append((ref, name))
             continue
 
-        if kind == "metaphor":
-            mid += 1
-            m_id = f"M{mid}"
-            vehicle = args.get("vehicle")
-            source = args.get("source")
-            mtype = rec.get("metaphor_type") or "Metaphor"
-
-            if vehicle:
-                vehicles.add(vehicle)
-            if source and source not in DIVINE_IDS:
-                humans.add(source)
-
-            metaphors.append({
-                "id": m_id,
-                "ref": ref,
-                "text": verse_text.get(ref, rec.get("evidence", "")),
-                "vehicle": vehicle,
-                "source": source,
-                "type": mtype,
-                "args": args,
-            })
+        if ftype == "killed":
+            killer = rec.get("killer")
+            victim = rec.get("victim")
+            if killer and victim:
+                if killer not in DIVINE_IDS:
+                    humans.add(killer)
+                if victim not in DIVINE_IDS:
+                    humans.add(victim)
+                kill_edges.append((killer, victim, ref))
             continue
 
-    # Nodes
+        if ftype == "spoke_to":
+            speaker = rec.get("speaker")
+            listener = rec.get("listener")
+            if speaker and listener:
+                if speaker not in DIVINE_IDS:
+                    humans.add(speaker)
+                if listener not in DIVINE_IDS:
+                    humans.add(listener)
+                speech_edges.append((speaker, listener, ref))
+            continue
+
+        if ftype == "traveled":
+            traveler = rec.get("traveler")
+            source = rec.get("source")
+            destination = rec.get("destination")
+            if traveler:
+                if traveler not in DIVINE_IDS:
+                    humans.add(traveler)
+            if source:
+                places.add(source)
+            if destination:
+                places.add(destination)
+            if traveler and destination:
+                travel_edges.append((traveler, source, destination, ref))
+            continue
+
+        if ftype == "role":
+            person = rec.get("person")
+            role_name = rec.get("role")
+            realm = rec.get("realm")
+            if person and person not in DIVINE_IDS:
+                humans.add(person)
+            if role_name:
+                roles.add(role_name)
+            if realm:
+                places.add(realm)
+            if person and role_name:
+                role_edges.append((person, role_name, realm, ref))
+            continue
+
+        if ftype == "appeared_to":
+            entity = rec.get("entity")
+            recipient = rec.get("recipient")
+            if entity and recipient:
+                if entity not in DIVINE_IDS:
+                    humans.add(entity)
+                if recipient not in DIVINE_IDS:
+                    humans.add(recipient)
+                appearance_edges.append((entity, recipient, ref))
+            continue
+
+        if ftype == "manifestation":
+            entity = rec.get("entity")
+            form = rec.get("form")
+            if entity and form:
+                if entity not in DIVINE_IDS:
+                    humans.add(entity)
+                forms.add(form)
+                manifestation_edges.append((entity, form, ref))
+            continue
+
     for h in sorted(humans):
         stmts.append(f"MERGE (:Human {{id:{j(h)}}});\n")
     for p in sorted(places):
         stmts.append(f"MERGE (:Place {{id:{j(p)}}});\n")
-    for ph in sorted(phenomena):
-        stmts.append(f"MERGE (:Phenomenon {{id:{j(ph)}}});\n")
-    for v in sorted(vehicles):
-        stmts.append(f"MERGE (:Vehicle {{id:{j(v)}}});\n")
+    for r in sorted(roles):
+        stmts.append(f"MERGE (:Role {{id:{j(r)}}});\n")
+    for n in sorted(names):
+        stmts.append(f"MERGE (:Name {{id:{j(n)}}});\n")
+    for form in sorted(forms):
+        stmts.append(f"MERGE (:ManifestationForm {{id:{j(form)}}});\n")
 
-    # Parent edges
-    for parent, child, role in parent_edges:
+    all_refs = set()
+    for _, _, _, ref in parent_edges:
+        all_refs.add(ref)
+    for ref, _ in rename_facts:
+        all_refs.add(ref)
+    for _, _, ref in kill_edges:
+        all_refs.add(ref)
+    for _, _, ref in speech_edges:
+        all_refs.add(ref)
+    for _, _, _, ref in travel_edges:
+        all_refs.add(ref)
+    for _, _, _, ref in role_edges:
+        all_refs.add(ref)
+    for _, _, ref in appearance_edges:
+        all_refs.add(ref)
+    for _, _, ref in manifestation_edges:
+        all_refs.add(ref)
+
+    for ref in sorted(all_refs):
         stmts.append(
-            f"MATCH (p:Human {{id:{j(parent)}}}),(c:Human {{id:{j(child)}}}) "
-            f"MERGE (p)-[:PARENT_OF {{role:{j(role)}}}]->(c);\n"
+            f"MERGE (v:Verse {{id:{j(ref)}}}) "
+            f"SET v.text={j(verse_text.get(ref, ''))};\n"
         )
 
-    # Events
-    for ev in events:
+    for parent, child, gender, ref in parent_edges:
+        props = f"ref:{j(ref)}"
+        if gender:
+            props += f", parent_gender:{j(gender)}"
         stmts.append(
-            f"MERGE (e:Event {{id:{j(ev['id'])}}}) "
-            f"SET e.type={j(ev['type'])}, e.ref={j(ev['ref'])}, e.text={j(ev['text'])};\n"
+            f"MATCH (p:Human {{id:{j(parent)}}}),(c:Human {{id:{j(child)}}}),(v:Verse {{id:{j(ref)}}}) "
+            f"MERGE (p)-[:PARENT_OF {{{props}}}]->(c) "
+            f"MERGE (p)-[:MENTIONED_IN]->(v) "
+            f"MERGE (c)-[:MENTIONED_IN]->(v);\n"
         )
 
-        args = ev["args"]
-        agent = args.get("agent") or args.get("speaker") or args.get("who")
-        if agent in DIVINE_IDS:
-            stmts.append(
-                f"MATCH (g:DivineEntity {{id:'God'}}),(e:Event {{id:{j(ev['id'])}}}) "
-                f"MERGE (g)-[:AGENT_OF]->(e);\n"
-            )
-        elif agent:
-            stmts.append(
-                f"MATCH (h:Human {{id:{j(agent)}}}),(e:Event {{id:{j(ev['id'])}}}) "
-                f"MERGE (h)-[:AGENT_OF]->(e);\n"
-            )
-
-        recipient = args.get("recipient")
-        if recipient:
-            stmts.append(
-                f"MATCH (h:Human {{id:{j(recipient)}}}),(e:Event {{id:{j(ev['id'])}}}) "
-                f"MERGE (e)-[:RECIPIENT]->(h);\n"
-            )
-
-        med = args.get("medium") or args.get("form")
-        if med:
-            stmts.append(
-                f"MATCH (p:Phenomenon {{id:{j(med)}}}),(e:Event {{id:{j(ev['id'])}}}) "
-                f"MERGE (e)-[:HAS_MEDIUM]->(p);\n"
-            )
-
-        where = args.get("where")
-        who = args.get("who")
-        if where and who:
-            stmts.append(
-                f"MATCH (h:Human {{id:{j(who)}}}),(pl:Place {{id:{j(where)}}}) "
-                f"MERGE (h)-[:MOVED_TO]->(pl);\n"
-            )
-
-    # Metaphors
-    for m in metaphors:
+    for ref, name in rename_facts:
         stmts.append(
-            f"MERGE (mm:Metaphor {{id:{j(m['id'])}}}) "
-            f"SET mm.type={j(m['type'])}, mm.ref={j(m['ref'])}, mm.text={j(m['text'])};\n"
+            f"MATCH (n:Name {{id:{j(name)}}}),(v:Verse {{id:{j(ref)}}}) "
+            f"MERGE (v)-[:ASSIGNS_NAME]->(n);\n"
         )
 
-        source = m.get("source")
-        vehicle = m.get("vehicle")
+    for killer, victim, ref in kill_edges:
+        killer_match = f"(g:DivineEntity {{id:{j(killer)}}})" if killer in DIVINE_IDS else f"(k:Human {{id:{j(killer)}}})"
+        victim_match = f"(g2:DivineEntity {{id:{j(victim)}}})" if victim in DIVINE_IDS else f"(vct:Human {{id:{j(victim)}}})"
+        killer_var = "g" if killer in DIVINE_IDS else "k"
+        victim_var = "g2" if victim in DIVINE_IDS else "vct"
 
-        if source in DIVINE_IDS:
+        stmts.append(
+            f"MATCH {killer_match},{victim_match},(v:Verse {{id:{j(ref)}}}) "
+            f"MERGE ({killer_var})-[:KILLED {{ref:{j(ref)}}}]->({victim_var}) "
+            f"MERGE ({killer_var})-[:MENTIONED_IN]->(v) "
+            f"MERGE ({victim_var})-[:MENTIONED_IN]->(v);\n"
+        )
+
+    for speaker, listener, ref in speech_edges:
+        speaker_match = f"(g:DivineEntity {{id:{j(speaker)}}})" if speaker in DIVINE_IDS else f"(s:Human {{id:{j(speaker)}}})"
+        listener_match = f"(g2:DivineEntity {{id:{j(listener)}}})" if listener in DIVINE_IDS else f"(l:Human {{id:{j(listener)}}})"
+        speaker_var = "g" if speaker in DIVINE_IDS else "s"
+        listener_var = "g2" if listener in DIVINE_IDS else "l"
+
+        stmts.append(
+            f"MATCH {speaker_match},{listener_match},(v:Verse {{id:{j(ref)}}}) "
+            f"MERGE ({speaker_var})-[:SPOKE_TO {{ref:{j(ref)}}}]->({listener_var}) "
+            f"MERGE ({speaker_var})-[:MENTIONED_IN]->(v) "
+            f"MERGE ({listener_var})-[:MENTIONED_IN]->(v);\n"
+        )
+
+    for traveler, source, destination, ref in travel_edges:
+        traveler_match = f"(g:DivineEntity {{id:{j(traveler)}}})" if traveler in DIVINE_IDS else f"(t:Human {{id:{j(traveler)}}})"
+        traveler_var = "g" if traveler in DIVINE_IDS else "t"
+
+        if source:
             stmts.append(
-                f"MATCH (g:DivineEntity {{id:'God'}}),(mm:Metaphor {{id:{j(m['id'])}}}) "
-                f"MERGE (g)-[:SOURCE_OF]->(mm);\n"
+                f"MATCH {traveler_match},(src:Place {{id:{j(source)}}}),(dst:Place {{id:{j(destination)}}}),(v:Verse {{id:{j(ref)}}}) "
+                f"MERGE ({traveler_var})-[:TRAVELED_FROM {{ref:{j(ref)}}}]->(src) "
+                f"MERGE ({traveler_var})-[:TRAVELED_TO {{ref:{j(ref)}}}]->(dst) "
+                f"MERGE ({traveler_var})-[:MENTIONED_IN]->(v);\n"
             )
-        elif source:
+        else:
             stmts.append(
-                f"MATCH (h:Human {{id:{j(source)}}}),(mm:Metaphor {{id:{j(m['id'])}}}) "
-                f"MERGE (h)-[:SOURCE_OF]->(mm);\n"
+                f"MATCH {traveler_match},(dst:Place {{id:{j(destination)}}}),(v:Verse {{id:{j(ref)}}}) "
+                f"MERGE ({traveler_var})-[:TRAVELED_TO {{ref:{j(ref)}}}]->(dst) "
+                f"MERGE ({traveler_var})-[:MENTIONED_IN]->(v);\n"
             )
 
-        if vehicle:
+    for person, role_name, realm, ref in role_edges:
+        person_match = f"(g:DivineEntity {{id:{j(person)}}})" if person in DIVINE_IDS else f"(p:Human {{id:{j(person)}}})"
+        person_var = "g" if person in DIVINE_IDS else "p"
+
+        if realm:
             stmts.append(
-                f"MATCH (v:Vehicle {{id:{j(vehicle)}}}),(mm:Metaphor {{id:{j(m['id'])}}}) "
-                f"MERGE (mm)-[:VEHICLE]->(v);\n"
+                f"MATCH {person_match},(r:Role {{id:{j(role_name)}}}),(pl:Place {{id:{j(realm)}}}),(v:Verse {{id:{j(ref)}}}) "
+                f"MERGE ({person_var})-[:HAS_ROLE {{ref:{j(ref)}}}]->(r) "
+                f"MERGE ({person_var})-[:REIGNED_OVER {{ref:{j(ref)}}}]->(pl) "
+                f"MERGE ({person_var})-[:MENTIONED_IN]->(v);\n"
+            )
+        else:
+            stmts.append(
+                f"MATCH {person_match},(r:Role {{id:{j(role_name)}}}),(v:Verse {{id:{j(ref)}}}) "
+                f"MERGE ({person_var})-[:HAS_ROLE {{ref:{j(ref)}}}]->(r) "
+                f"MERGE ({person_var})-[:MENTIONED_IN]->(v);\n"
             )
 
-        # Add NOT_IDENTICAL_TO only for divine source
-        if source in DIVINE_IDS and vehicle:
-            stmts.append(
-                f"MATCH (g:DivineEntity {{id:'God'}}),(v:Vehicle {{id:{j(vehicle)}}}) "
-                f"MERGE (g)-[:NOT_IDENTICAL_TO]->(v);\n"
-            )
+    for entity, recipient, ref in appearance_edges:
+        entity_match = f"(g:DivineEntity {{id:{j(entity)}}})" if entity in DIVINE_IDS else f"(e:Human {{id:{j(entity)}}})"
+        rec_match = f"(g2:DivineEntity {{id:{j(recipient)}}})" if recipient in DIVINE_IDS else f"(r:Human {{id:{j(recipient)}}})"
+        entity_var = "g" if entity in DIVINE_IDS else "e"
+        rec_var = "g2" if recipient in DIVINE_IDS else "r"
+
+        stmts.append(
+            f"MATCH {entity_match},{rec_match},(v:Verse {{id:{j(ref)}}}) "
+            f"MERGE ({entity_var})-[:APPEARED_TO {{ref:{j(ref)}}}]->({rec_var}) "
+            f"MERGE ({entity_var})-[:MENTIONED_IN]->(v) "
+            f"MERGE ({rec_var})-[:MENTIONED_IN]->(v);\n"
+        )
+
+    for entity, form, ref in manifestation_edges:
+        entity_match = f"(g:DivineEntity {{id:{j(entity)}}})" if entity in DIVINE_IDS else f"(e:Human {{id:{j(entity)}}})"
+        entity_var = "g" if entity in DIVINE_IDS else "e"
+
+        stmts.append(
+            f"MATCH {entity_match},(mf:ManifestationForm {{id:{j(form)}}}),(v:Verse {{id:{j(ref)}}}) "
+            f"MERGE ({entity_var})-[:MANIFESTED_AS {{ref:{j(ref)}}}]->(mf) "
+            f"MERGE ({entity_var})-[:MENTIONED_IN]->(v);\n"
+        )
 
     ensure_dir_for(out_cypher)
     with open(out_cypher, "w", encoding="utf-8") as f:
@@ -416,65 +511,123 @@ def _trivia_schema_v0_ok(rec: Dict[str, Any]) -> bool:
     args = rec.get("args") or {}
 
     if kind == "genealogy":
-        # old trivia expects args['father'] and args['child']
         return bool(args.get("father") and args.get("child"))
 
     if kind == "metaphor":
-        # old trivia often expects args['source'] and args['vehicle']
         return bool(args.get("source") and args.get("vehicle"))
 
     if kind == "event":
-        # keep events; event templates usually tolerate missing fields
         return True
 
     return False
 
-def run_trivia_robust(parsed_path: str, verses_path: str, out_dir: str, strict: bool = False) -> None:
+
+def run_trivia_robust(
+    parsed_path: str,
+    verses_path: str,
+    out_dir: str,
+    strict: bool = False,
+    translation: str = "WEB",
+) -> None:
     """
-    Try to generate trivia. If the trivia module crashes due to schema drift,
-    retry with a filtered parsed file that matches the module's expectations.
+    Generate trivia directly from the normalized extracted facts using the new
+    extractors/question_engine.py path.
     """
-    from trivia.generate_questions import generate
+    from extractors.question_engine import load_json_or_jsonl, facts_to_trivia_pack
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # Attempt 1: run on full parsed
     try:
-        generate(parsed_path, verses_path, out_dir)
-        log(f"[trivia] ok (full parsed) -> {out_dir}")
+        facts = load_json_or_jsonl(parsed_path)
+
+        pack = facts_to_trivia_pack(
+            facts=facts,
+            pack_id=f"bible-{translation.lower()}-pack",
+            title=f"Bible Trivia Pack ({translation.upper()})",
+            translation=translation,
+            n=None,
+            seed=42,
+        )
+
+        out_path = os.path.join(out_dir, "trivia_pack.json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(pack, f, ensure_ascii=False, indent=2)
+
+        log(f"[trivia] wrote {out_path} questions={pack.get('question_count', 0)}")
         return
+
     except Exception as e:
-        log(f"[trivia] failed on full parsed: {type(e).__name__}: {e}")
-
-    # Attempt 2: filter down to v0-safe records and retry
-    filtered_path = os.path.join(out_dir, "parsed.trivia.jsonl")
-    def filtered_iter() -> Iterator[Dict[str, Any]]:
-        for _, rec in iter_jsonl(parsed_path):
-            if _trivia_schema_v0_ok(rec):
-                yield rec
-
-    kept = write_jsonl(filtered_path, filtered_iter())
-    log(f"[trivia] retry with filtered parsed ({kept} records) -> {filtered_path}")
-
-    try:
-        generate(filtered_path, verses_path, out_dir)
-        log(f"[trivia] ok (filtered) -> {out_dir}")
-        return
-    except Exception as e:
-        log(f"[trivia] failed on filtered parsed: {type(e).__name__}: {e}")
+        log(f"[trivia] failed: {type(e).__name__}: {e}")
         if strict:
             raise
+    from extractors.question_engine import load_json_or_jsonl, facts_to_trivia_pack
 
+    os.makedirs(out_dir, exist_ok=True)
 
+    facts = load_json_or_jsonl(parsed_path)
+
+    pack = facts_to_trivia_pack(
+        facts=facts,
+        pack_id="bible-pack",
+        title="Bible Trivia Pack",
+        translation="WEB",
+        n=None,
+        seed=42,
+    )
+
+    out_path = os.path.join(out_dir, "trivia_pack.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(pack, f, ensure_ascii=False, indent=2)
+
+    log(f"[trivia] wrote {out_path}")
 # -----------------------------
 # Pipeline
 # -----------------------------
 
-def run_pipeline(in_path: str, out_dir: str, strict: bool = False, no_trivia: bool = False) -> None:
+def run_pipeline(in_path: str, out_dir: str, strict: bool = False, no_trivia: bool = False, translation: str = "WEB") -> None:
+    from extractors.bible_rule_engine import extract_facts
+
     os.makedirs(out_dir, exist_ok=True)
 
     parsed = os.path.join(out_dir, "parsed.jsonl")
-    parse_main(in_path, parsed)
+    drops = os.path.join(out_dir, "drops.jsonl")
+
+    all_facts: List[Dict[str, Any]] = []
+    all_drops: List[Dict[str, Any]] = []
+
+    for _, row in iter_jsonl(in_path):
+        ref = row.get("ref")
+        text = row.get("text", "")
+        if not ref or not text:
+            continue
+
+        facts, drop_rows = extract_facts(ref, text, translation=translation)
+
+        norm = " ".join(str(text).split())
+
+        for fact in facts:
+            fact["text"] = text
+            fact["norm"] = norm
+            fact["translation"] = translation.upper()
+            all_facts.append(fact)
+
+        for drop in drop_rows:
+            drop["text"] = text
+            drop["norm"] = norm
+            drop["translation"] = translation.upper()
+            all_drops.append(drop)
+
+    ensure_dir_for(parsed)
+    with open(parsed, "w", encoding="utf-8") as f:
+        for rec in all_facts:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    ensure_dir_for(drops)
+    with open(drops, "w", encoding="utf-8") as f:
+        for rec in all_drops:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    log(f"[extract] wrote {parsed} facts={len(all_facts)} drops={len(all_drops)}")
 
     gen_logic(
         parsed,
@@ -486,7 +639,13 @@ def run_pipeline(in_path: str, out_dir: str, strict: bool = False, no_trivia: bo
     gen_graph_cypher(parsed, in_path, os.path.join(out_dir, "graph", "load.cypher"))
 
     if not no_trivia:
-        run_trivia_robust(parsed, in_path, os.path.join(out_dir, "trivia"), strict=strict)
+        run_trivia_robust(
+            parsed,
+            in_path,
+            os.path.join(out_dir, "trivia"),
+            strict=strict,
+            translation=translation,
+        )
     else:
         log("[trivia] skipped (--no-trivia)")
 
@@ -499,6 +658,13 @@ if __name__ == "__main__":
     ap.add_argument("--out", dest="out", required=True)
     ap.add_argument("--strict", action="store_true", help="Raise if trivia fails (default: keep going)")
     ap.add_argument("--no-trivia", action="store_true", help="Skip trivia generation entirely")
+    ap.add_argument("--translation", default="WEB", choices=["WEB", "KJV"])
     args = ap.parse_args()
 
-    run_pipeline(args.inp, args.out, strict=args.strict, no_trivia=args.no_trivia)
+    run_pipeline(
+        args.inp,
+        args.out,
+        strict=args.strict,
+        no_trivia=args.no_trivia,
+        translation=args.translation,
+    )

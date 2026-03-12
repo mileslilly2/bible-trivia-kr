@@ -1,8 +1,7 @@
-# extractors/question_engine.py
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 import hashlib
 import json
@@ -25,18 +24,74 @@ _BAD_NAMES = {
     "One", "Someone", "Anyone", "Noone", "None",
 }
 
-def is_good_name(s: Optional[str]) -> bool:
+NOISY_PREFIXES = {
+    "Moreover", "Then", "Now", "And", "But", "After", "Before", "Behold",
+}
+
+TITLE_PREFIXES = {
+    "King", "Queen", "Prophet", "Priest",
+}
+
+BAD_SINGLE_TOKENS = {
+    "Ethiopian", "Bethlehemite", "Hushathite",
+}
+
+DIVINE_CANON = {
+    "Yahweh": "Yahweh",
+    "God": "God",
+    "LORD": "LORD",
+    "angel of the LORD": "angel of the LORD",
+    "angel of Yahweh": "angel of Yahweh",
+    "angel of God": "angel of God",
+}
+
+
+def normalize_choice_name(s: Optional[str]) -> Optional[str]:
     if not s:
-        return False
+        return None
+
     s = s.strip()
+    if not s:
+        return None
+
+    parts = s.split()
+    while parts and parts[0] in NOISY_PREFIXES:
+        parts = parts[1:]
+
+    if parts and parts[0] in TITLE_PREFIXES and len(parts) >= 2:
+        parts = parts[1:]
+
+    s = " ".join(parts).strip(" ,;:")
+    if not s:
+        return None
+
+    if s in DIVINE_CANON:
+        return DIVINE_CANON[s]
+
+    if s in BAD_SINGLE_TOKENS:
+        return None
+
+    return s
+
+
+def is_good_name(s: Optional[str]) -> bool:
+    s = normalize_choice_name(s)
     if not s:
         return False
     if s in _BAD_NAMES:
         return False
-    # Avoid single-letter junk, etc.
     if len(s) < 2:
         return False
     return True
+
+
+def normalize_form(s: Optional[str]) -> Optional[str]:
+    if not s:
+        return None
+    s = s.strip().lower()
+    if not s:
+        return None
+    return s
 
 
 # -----------------------------
@@ -68,37 +123,20 @@ def _stable_id(*parts: str) -> str:
 
 
 # -----------------------------
-# Loading helpers (json OR jsonl)
+# Loading helpers (JSONL)
 # -----------------------------
 
-def load_json_or_jsonl(path: str | Path) -> List[Dict[str, Any]]:
+def load_json_or_jsonl(path: str | Path):
     p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(str(p))
+    rows = []
 
-    txt = p.read_text(encoding="utf-8").lstrip()
-    if not txt:
-        return []
-
-    # If it starts like a JSON array/object, treat as json.
-    if txt[0] in "[{":
-        data = json.loads(txt)
-        # Your out/parsed.jsonl is currently a JSON array → handle it.
-        if isinstance(data, list):
-            return data
-        return [data]
-
-    # Otherwise treat as JSONL.
-    rows: List[Dict[str, Any]] = []
-    with p.open("r", encoding="utf-8") as f:
-        for lineno, line in enumerate(f, start=1):
+    with open(p, "r", encoding="utf-8") as f:
+        for line in f:
             line = line.strip()
             if not line:
                 continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Bad JSONL at {p}:{lineno}: {e}") from e
+            rows.append(json.loads(line))
+
     return rows
 
 
@@ -107,34 +145,147 @@ def load_json_or_jsonl(path: str | Path) -> List[Dict[str, Any]]:
 # -----------------------------
 
 def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-    fathers, mothers, children, names = set(), set(), set(), set()
+    people = set()
+    parent_male = set()
+    parent_female = set()
+    names = set()
+    destinations = set()
+    roles = set()
+    realms = set()
+    entities = set()
+    forms = set()
+    speakers = set()
+    listeners = set()
+    killers = set()
+    victims = set()
+    travelers = set()
+    appearance_recipients = set()
 
     for f in facts:
-        if f.get("type") == "genealogy":
-            if is_good_name(f.get("father")):
-                fathers.add(f["father"])
-            if is_good_name(f.get("mother")):
-                mothers.add(f["mother"])
-            if is_good_name(f.get("child")):
-                children.add(f["child"])
+        ftype = f.get("type")
 
-        if f.get("type") == "rename":
-            if is_good_name(f.get("name")):
-                names.add(f["name"])
+        if ftype == "parent_of":
+            parent = normalize_choice_name(f.get("parent"))
+            child = normalize_choice_name(f.get("child"))
+            gender = f.get("parent_gender")
+
+            if is_good_name(parent):
+                people.add(parent)
+                if gender == "male":
+                    parent_male.add(parent)
+                elif gender == "female":
+                    parent_female.add(parent)
+
+            if is_good_name(child):
+                people.add(child)
+
+        elif ftype == "rename":
+            name = normalize_choice_name(f.get("name"))
+            if is_good_name(name):
+                names.add(name)
+
+        elif ftype == "killed":
+            killer = normalize_choice_name(f.get("killer"))
+            victim = normalize_choice_name(f.get("victim"))
+            if is_good_name(killer):
+                people.add(killer)
+                killers.add(killer)
+            if is_good_name(victim):
+                people.add(victim)
+                victims.add(victim)
+
+        elif ftype == "spoke_to":
+            speaker = normalize_choice_name(f.get("speaker"))
+            listener = normalize_choice_name(f.get("listener"))
+            if is_good_name(speaker):
+                people.add(speaker)
+                speakers.add(speaker)
+            if is_good_name(listener):
+                people.add(listener)
+                listeners.add(listener)
+
+        elif ftype == "traveled":
+            traveler = normalize_choice_name(f.get("traveler"))
+            source = normalize_choice_name(f.get("source"))
+            destination = normalize_choice_name(f.get("destination"))
+            if is_good_name(traveler):
+                people.add(traveler)
+                travelers.add(traveler)
+            if is_good_name(source):
+                destinations.add(source)
+            if is_good_name(destination):
+                destinations.add(destination)
+
+        elif ftype == "role":
+            person = normalize_choice_name(f.get("person"))
+            role_name = normalize_choice_name(f.get("role"))
+            realm = normalize_choice_name(f.get("realm"))
+            if is_good_name(person):
+                people.add(person)
+            if is_good_name(role_name):
+                roles.add(role_name)
+            if is_good_name(realm):
+                realms.add(realm)
+
+        elif ftype == "appeared_to":
+            entity = normalize_choice_name(f.get("entity"))
+            recipient = normalize_choice_name(f.get("recipient"))
+            if is_good_name(entity):
+                entities.add(entity)
+                people.add(entity)
+            if is_good_name(recipient):
+                appearance_recipients.add(recipient)
+                people.add(recipient)
+
+        elif ftype == "manifestation":
+            entity = normalize_choice_name(f.get("entity"))
+            form = normalize_form(f.get("form"))
+            if is_good_name(entity):
+                entities.add(entity)
+                people.add(entity)
+            if form:
+                forms.add(form)
 
     return {
-        "fathers": sorted(fathers),
-        "mothers": sorted(mothers),
-        "children": sorted(children),
+        "people": sorted(people),
+        "parent_male": sorted(parent_male),
+        "parent_female": sorted(parent_female),
         "names": sorted(names),
+        "destinations": sorted(destinations),
+        "roles": sorted(roles),
+        "realms": sorted(realms),
+        "entities": sorted(entities),
+        "forms": sorted(forms),
+        "speakers": sorted(speakers),
+        "listeners": sorted(listeners),
+        "killers": sorted(killers),
+        "victims": sorted(victims),
+        "travelers": sorted(travelers),
+        "appearance_recipients": sorted(appearance_recipients),
     }
 
 
 def _pick_distractors(rng: random.Random, pool: List[str], correct: str, k: int) -> Optional[List[str]]:
-    pool2 = [x for x in pool if x != correct]
+    correct = normalize_choice_name(correct) or correct
+    pool2 = []
+    for x in pool:
+        nx = normalize_choice_name(x) if isinstance(x, str) else x
+        if nx and nx != correct:
+            pool2.append(nx)
+    pool2 = sorted(set(pool2))
     if len(pool2) < k:
         return None
     return rng.sample(pool2, k)
+
+
+def choices_look_clean(choices: List[str]) -> bool:
+    for c in choices:
+        c2 = normalize_choice_name(c)
+        if not is_good_name(c2):
+            return False
+        if c2.startswith(("Moreover ", "Then ", "Now ")):
+            return False
+    return True
 
 
 # -----------------------------
@@ -153,63 +304,47 @@ def fact_to_questions(
     src_text = fact.get("text") or ""
     norm_text = fact.get("norm") or normalize(src_text)
 
-    # ---------- genealogy ----------
-    if ftype == "genealogy":
-        child = fact.get("child")
-        father = fact.get("father")
-        mother = fact.get("mother")
+    # ---------- parent_of ----------
+    if ftype == "parent_of":
+        parent = normalize_choice_name(fact.get("parent"))
+        child = normalize_choice_name(fact.get("child"))
+        parent_gender = fact.get("parent_gender")
 
-        if is_good_name(child) and is_good_name(father):
-            # Q: Who became the father of X?
-            prompt = f"Who became the father of {child}?"
-            correct = father
-            distractors = _pick_distractors(rng, pools["fathers"], correct, 3)
+        if is_good_name(child) and is_good_name(parent):
+            if parent_gender == "female":
+                prompt = f"Who was the mother of {child}?"
+                distractor_pool = pools["parent_female"] or pools["people"]
+            elif parent_gender == "male":
+                prompt = f"Who was the father of {child}?"
+                distractor_pool = pools["parent_male"] or pools["people"]
+            else:
+                prompt = f"Who was the parent of {child}?"
+                distractor_pool = pools["people"]
+
+            correct = parent
+            distractors = _pick_distractors(rng, distractor_pool, correct, 3)
             if distractors:
                 choices = distractors + [correct]
                 rng.shuffle(choices)
-                answer_index = choices.index(correct)
-                qid = _stable_id("genealogy_father_of", ref, child, correct, prompt)
-                out.append(MCQuestion(
-                    id=qid,
-                    prompt=prompt,
-                    choices=choices,
-                    answer_index=answer_index,
-                    explanation=f"{ref}: {src_text}".strip(),
-                    ref=ref,
-                    category="Bible • Genealogy",
-                    difficulty="easy",
-                    meta={"fact": fact, "norm": norm_text},
-                ))
-
-        if is_good_name(child) and is_good_name(mother):
-            # Q: Who gave birth to X? (your WEB pattern uses “gave birth to” a lot)
-            prompt = f"Who gave birth to {child}?"
-            correct = mother
-            distractors = _pick_distractors(rng, pools["mothers"], correct, 3)
-            if distractors:
-                choices = distractors + [correct]
-                rng.shuffle(choices)
-                answer_index = choices.index(correct)
-                qid = _stable_id("genealogy_mother_of", ref, child, correct, prompt)
-                out.append(MCQuestion(
-                    id=qid,
-                    prompt=prompt,
-                    choices=choices,
-                    answer_index=answer_index,
-                    explanation=f"{ref}: {src_text}".strip(),
-                    ref=ref,
-                    category="Bible • Genealogy",
-                    difficulty="easy",
-                    meta={"fact": fact, "norm": norm_text},
-                ))
-
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("parent_of", ref, child, correct, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Genealogy",
+                        difficulty="easy",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
         return out
 
     # ---------- rename ----------
-    # Your rename facts currently only have {"name": X}, which is not enough for strong standalone Qs.
-    # So we only produce a “reference-anchored” question (high precision, low ambiguity).
     if ftype == "rename":
-        name = fact.get("name")
+        name = normalize_choice_name(fact.get("name"))
         if is_good_name(name):
             prompt = f"In {ref}, what name is given?"
             correct = name
@@ -217,45 +352,276 @@ def fact_to_questions(
             if distractors:
                 choices = distractors + [correct]
                 rng.shuffle(choices)
-                answer_index = choices.index(correct)
-                qid = _stable_id("rename_name", ref, correct, prompt)
-                out.append(MCQuestion(
-                    id=qid,
-                    prompt=prompt,
-                    choices=choices,
-                    answer_index=answer_index,
-                    explanation=f"{ref}: {src_text}".strip(),
-                    ref=ref,
-                    category="Bible • Names",
-                    difficulty="easy",
-                    meta={"fact": fact, "norm": norm_text},
-                ))
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("rename_name", ref, correct, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Names",
+                        difficulty="easy",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
         return out
 
-    # ---------- violence ----------
-    if ftype == "violence":
-        who = fact.get("who")
-        target = fact.get("target")
-        if is_good_name(who) and is_good_name(target):
-            prompt = f"According to {ref}, who was killed?"
-            correct = target
-            distractors = _pick_distractors(rng, pools["children"], correct, 3) or _pick_distractors(rng, pools["names"], correct, 3)
+    # ---------- killed ----------
+    if ftype == "killed":
+        killer = normalize_choice_name(fact.get("killer"))
+        victim = normalize_choice_name(fact.get("victim"))
+
+        if is_good_name(victim) and is_good_name(killer):
+            prompt = f"Who killed {victim}?"
+            correct = killer
+            distractors = _pick_distractors(rng, pools["killers"] or pools["people"], correct, 3)
             if distractors:
                 choices = distractors + [correct]
                 rng.shuffle(choices)
-                answer_index = choices.index(correct)
-                qid = _stable_id("violence_target", ref, who, target, prompt)
-                out.append(MCQuestion(
-                    id=qid,
-                    prompt=prompt,
-                    choices=choices,
-                    answer_index=answer_index,
-                    explanation=f"{ref}: {src_text}".strip(),
-                    ref=ref,
-                    category="Bible • Events",
-                    difficulty="medium",
-                    meta={"fact": fact, "norm": norm_text},
-                ))
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("killed_killer", ref, killer, victim, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Events",
+                        difficulty="medium",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+
+            prompt2 = f"According to {ref}, who was killed?"
+            correct2 = victim
+            distractors2 = _pick_distractors(rng, pools["victims"] or pools["people"], correct2, 3)
+            if distractors2:
+                choices2 = distractors2 + [correct2]
+                rng.shuffle(choices2)
+                if choices_look_clean(choices2):
+                    answer_index2 = choices2.index(correct2)
+                    qid2 = _stable_id("killed_victim", ref, killer, victim, prompt2)
+                    out.append(MCQuestion(
+                        id=qid2,
+                        prompt=prompt2,
+                        choices=choices2,
+                        answer_index=answer_index2,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Events",
+                        difficulty="medium",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+        return out
+
+    # ---------- spoke_to ----------
+    if ftype == "spoke_to":
+        speaker = normalize_choice_name(fact.get("speaker"))
+        listener = normalize_choice_name(fact.get("listener"))
+
+        if is_good_name(listener) and is_good_name(speaker):
+            prompt = f"Who spoke to {listener}?"
+            correct = speaker
+            distractors = _pick_distractors(rng, pools["speakers"] or pools["people"], correct, 3)
+            if distractors:
+                choices = distractors + [correct]
+                rng.shuffle(choices)
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("spoke_to_speaker", ref, speaker, listener, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Dialogue",
+                        difficulty="easy",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+        return out
+
+    # ---------- traveled ----------
+    if ftype == "traveled":
+        traveler = normalize_choice_name(fact.get("traveler"))
+        source = normalize_choice_name(fact.get("source"))
+        destination = normalize_choice_name(fact.get("destination"))
+
+        if is_good_name(traveler) and is_good_name(destination):
+            prompt = f"Where did {traveler} travel to?"
+            correct = destination
+            distractors = _pick_distractors(rng, pools["destinations"], correct, 3)
+            if distractors:
+                choices = distractors + [correct]
+                rng.shuffle(choices)
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("traveled_destination", ref, traveler, destination, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Travel",
+                        difficulty="easy",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+
+        if is_good_name(traveler) and is_good_name(source) and is_good_name(destination):
+            prompt2 = f"From where did {traveler} travel to {destination}?"
+            correct2 = source
+            distractors2 = _pick_distractors(rng, pools["destinations"], correct2, 3)
+            if distractors2:
+                choices2 = distractors2 + [correct2]
+                rng.shuffle(choices2)
+                if choices_look_clean(choices2):
+                    answer_index2 = choices2.index(correct2)
+                    qid2 = _stable_id("traveled_source", ref, traveler, source, destination, prompt2)
+                    out.append(MCQuestion(
+                        id=qid2,
+                        prompt=prompt2,
+                        choices=choices2,
+                        answer_index=answer_index2,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Travel",
+                        difficulty="medium",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+        return out
+
+    # ---------- role ----------
+    if ftype == "role":
+        person = normalize_choice_name(fact.get("person"))
+        role_name = normalize_choice_name(fact.get("role"))
+        realm = normalize_choice_name(fact.get("realm"))
+
+        if is_good_name(person) and is_good_name(role_name):
+            prompt = f"What role did {person} have?"
+            correct = role_name
+            distractors = _pick_distractors(rng, pools["roles"], correct, 3)
+            if distractors:
+                choices = distractors + [correct]
+                rng.shuffle(choices)
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("role_name", ref, person, role_name, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Roles",
+                        difficulty="easy",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+
+        if is_good_name(person) and role_name == "king" and is_good_name(realm):
+            prompt2 = f"Over what realm did {person} reign?"
+            correct2 = realm
+            distractors2 = _pick_distractors(rng, pools["realms"], correct2, 3)
+            if distractors2:
+                choices2 = distractors2 + [correct2]
+                rng.shuffle(choices2)
+                if choices_look_clean(choices2):
+                    answer_index2 = choices2.index(correct2)
+                    qid2 = _stable_id("role_realm", ref, person, realm, prompt2)
+                    out.append(MCQuestion(
+                        id=qid2,
+                        prompt=prompt2,
+                        choices=choices2,
+                        answer_index=answer_index2,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Kingdoms",
+                        difficulty="medium",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+        return out
+
+    # ---------- appeared_to ----------
+    if ftype == "appeared_to":
+        entity = normalize_choice_name(fact.get("entity"))
+        recipient = normalize_choice_name(fact.get("recipient"))
+
+        if is_good_name(entity) and is_good_name(recipient):
+            prompt = f"To whom did {entity} appear?"
+            correct = recipient
+            distractors = _pick_distractors(rng, pools["appearance_recipients"] or pools["people"], correct, 3)
+            if distractors:
+                choices = distractors + [correct]
+                rng.shuffle(choices)
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("appeared_to_recipient", ref, entity, recipient, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Theophany",
+                        difficulty="medium",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+
+            prompt2 = f"Who appeared to {recipient}?"
+            correct2 = entity
+            distractors2 = _pick_distractors(rng, pools["entities"] or pools["people"], correct2, 3)
+            if distractors2:
+                choices2 = distractors2 + [correct2]
+                rng.shuffle(choices2)
+                if choices_look_clean(choices2):
+                    answer_index2 = choices2.index(correct2)
+                    qid2 = _stable_id("appeared_to_entity", ref, entity, recipient, prompt2)
+                    out.append(MCQuestion(
+                        id=qid2,
+                        prompt=prompt2,
+                        choices=choices2,
+                        answer_index=answer_index2,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Theophany",
+                        difficulty="medium",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
+        return out
+
+    # ---------- manifestation ----------
+    if ftype == "manifestation":
+        entity = normalize_choice_name(fact.get("entity"))
+        form = normalize_form(fact.get("form"))
+
+        if is_good_name(entity) and form:
+            prompt = f"In what form did {entity} manifest in {ref}?"
+            correct = form
+            distractors = _pick_distractors(rng, pools["forms"], correct, 3)
+            if distractors:
+                choices = distractors + [correct]
+                rng.shuffle(choices)
+                if choices_look_clean(choices):
+                    answer_index = choices.index(correct)
+                    qid = _stable_id("manifestation_form", ref, entity, form, prompt)
+                    out.append(MCQuestion(
+                        id=qid,
+                        prompt=prompt,
+                        choices=choices,
+                        answer_index=answer_index,
+                        explanation=f"{ref}: {src_text}".strip(),
+                        ref=ref,
+                        category="Bible • Manifestation",
+                        difficulty="medium",
+                        meta={"fact": fact, "norm": norm_text},
+                    ))
         return out
 
     return out
@@ -273,11 +639,12 @@ def generate_questions(
     rng = random.Random(seed)
     pools = build_pools(facts)
 
-    # Make deterministic-ish shuffle before expansion
     idxs = list(range(len(facts)))
     rng.shuffle(idxs)
 
     seen_ids = set()
+    seen_prompt_texts = set()
+    template_counts: Dict[tuple, int] = {}
     questions: List[MCQuestion] = []
 
     for i in idxs:
@@ -285,7 +652,30 @@ def generate_questions(
         for q in qs:
             if q.id in seen_ids:
                 continue
+
+            prompt_key = q.prompt.strip().lower()
+            if prompt_key in seen_prompt_texts:
+                continue
+
+            meta_fact = q.meta.get("fact", {}) if q.meta else {}
+            ftype = meta_fact.get("type", "unknown")
+
+            if ftype == "spoke_to":
+                template_key = ("spoke_to", "who_spoke_to")
+            elif ftype == "parent_of":
+                template_key = ("parent_of", q.prompt.split("?")[0].lower())
+            else:
+                template_key = (ftype, q.prompt.split("?")[0].lower())
+
+            template_counts[template_key] = template_counts.get(template_key, 0) + 1
+            if template_counts[template_key] > 25:
+                continue
+
+            if not choices_look_clean(q.choices):
+                continue
+
             seen_ids.add(q.id)
+            seen_prompt_texts.add(prompt_key)
             questions.append(q)
 
     if n is not None:
@@ -296,7 +686,7 @@ def generate_questions(
 
 
 # -----------------------------
-# Trivia Royale pack export (B)
+# Trivia Royale pack export
 # -----------------------------
 
 def facts_to_trivia_pack(
@@ -311,7 +701,6 @@ def facts_to_trivia_pack(
 
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    # Minimal, coherent pack container (easy to adapt to your in-app schema)
     return {
         "pack_id": pack_id,
         "title": title,
@@ -321,7 +710,6 @@ def facts_to_trivia_pack(
         "question_count": len(questions),
         "questions": [
             {
-                # common Trivia Royale-ish keys:
                 "id": q["id"],
                 "category": q.get("category", "Bible"),
                 "difficulty": q.get("difficulty", "easy"),

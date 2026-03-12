@@ -2,16 +2,16 @@ import re
 import sys
 from pathlib import Path
 import json
+import argparse
 
-# --- FORCE project root onto PYTHONPATH (must be before importing extractors) ---
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from extractors.bible_rule_engine import extract_facts
 
-INPUT_FILE = "data/verses.jsonl"
-FACTS_OUT = "out/parsed.jsonl"
-DROPS_OUT = "out/drops.jsonl"
+DEFAULT_INPUT_FILE = "data/verses.jsonl"
+DEFAULT_FACTS_OUT = "out/parsed.jsonl"
+DEFAULT_DROPS_OUT = "out/drops.jsonl"
 
 
 def normalize(text: str) -> str:
@@ -34,7 +34,14 @@ def load_jsonl(path: str):
 
 
 def main():
-    verses = load_jsonl(INPUT_FILE)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in", dest="inp", default=DEFAULT_INPUT_FILE)
+    ap.add_argument("--facts-out", dest="facts_out", default=DEFAULT_FACTS_OUT)
+    ap.add_argument("--drops-out", dest="drops_out", default=DEFAULT_DROPS_OUT)
+    ap.add_argument("--translation", dest="translation", default="WEB", choices=["WEB", "KJV"])
+    args = ap.parse_args()
+
+    verses = load_jsonl(args.inp)
     print("TOTAL VERSES LOADED:", len(verses))
 
     all_facts = []
@@ -48,30 +55,30 @@ def main():
             continue
 
         norm = normalize(text)
-
-        # NOTE: extract_facts returns (facts, drops)
-        facts, drops = extract_facts(ref, text, translation="WEB")
+        facts, drops = extract_facts(ref, text, translation=args.translation)
 
         for fact in facts:
             fact["text"] = text
             fact["norm"] = norm
+            fact["translation"] = args.translation
             all_facts.append(fact)
 
         for drop in drops:
             drop["text"] = text
             drop["norm"] = norm
+            drop["translation"] = args.translation
             all_drops.append(drop)
 
     print(f"Extracted {len(all_facts)} facts")
     print(f"Dropped {len(all_drops)} candidates")
 
-    Path(FACTS_OUT).parent.mkdir(parents=True, exist_ok=True)
-    Path(DROPS_OUT).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.facts_out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.drops_out).parent.mkdir(parents=True, exist_ok=True)
 
-    with open(FACTS_OUT, "w", encoding="utf-8") as f:
+    with open(args.facts_out, "w", encoding="utf-8") as f:
         json.dump(all_facts, f, indent=2, ensure_ascii=False)
 
-    with open(DROPS_OUT, "w", encoding="utf-8") as f:
+    with open(args.drops_out, "w", encoding="utf-8") as f:
         json.dump(all_drops, f, indent=2, ensure_ascii=False)
 
 
