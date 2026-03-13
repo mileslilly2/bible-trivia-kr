@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import re
+from collections import Counter
 from typing import Any, Dict, Iterator, Optional, Tuple, List
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,8 +56,104 @@ def ensure_dir_for(path: str) -> None:
         os.makedirs(d, exist_ok=True)
 
 
+STAGE_WIDTH = 9
+
+
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
+
+
+def stage_log(stage: str, msg: str) -> None:
+    log(f"[{stage:<{STAGE_WIDTH}}] {msg}")
+
+
+def sample_text(value: str, limit: int = 96) -> str:
+    text = " ".join(str(value).split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def summarize_counts(counts: Dict[str, int]) -> str:
+    items = [(name, count) for name, count in counts.items() if count]
+    if not items:
+        return "none"
+    items.sort(key=lambda item: (-item[1], item[0]))
+    return ", ".join(f"{name}={count}" for name, count in items)
+
+
+def count_csv_rows(path: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        return sum(1 for line in f if line.strip())
+
+
+def collect_csv_row_counts(out_dir: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    if not os.path.isdir(out_dir):
+        return counts
+    for name in sorted(os.listdir(out_dir)):
+        if not name.endswith(".csv"):
+            continue
+        path = os.path.join(out_dir, name)
+        if os.path.isfile(path):
+            counts[name] = count_csv_rows(path)
+    return counts
+
+
+def format_fact_sample(rec: Dict[str, Any]) -> str:
+    parts = [f"type={rec.get('type', '?')}"]
+    preferred_fields = (
+        "speaker",
+        "listener",
+        "parent",
+        "child",
+        "killer",
+        "victim",
+        "traveler",
+        "destination",
+        "person",
+        "role",
+        "entity",
+        "recipient",
+    )
+    for key in preferred_fields:
+        value = rec.get(key)
+        if value:
+            parts.append(f"{key}={value}")
+    if rec.get("ref"):
+        parts.append(f"ref={rec['ref']}")
+    return sample_text(" ".join(parts))
+
+
+def format_souffle_row_sample(relation: str, rec: Dict[str, Any]) -> str:
+    if relation == "ancestor_of":
+        return sample_text(f"ancestor_of {rec.get('ancestor', '')} -> {rec.get('descendant', '')}")
+    if relation in {"begat", "father"}:
+        return sample_text(f"{relation} {rec.get('father', '')} -> {rec.get('child', '')}")
+    if relation == "event_type":
+        return sample_text(f"event_type {rec.get('eid', '')} = {rec.get('event_type', '')}")
+    if relation == "agent":
+        return sample_text(f"agent {rec.get('eid', '')} -> {rec.get('agent', '')}")
+    if relation == "recipient":
+        return sample_text(f"recipient {rec.get('eid', '')} -> {rec.get('recipient', '')}")
+    if relation == "said":
+        return sample_text(f"said {rec.get('speaker', '')} -> {rec.get('listener', '')}")
+    return sample_text(json.dumps(rec, ensure_ascii=False))
+
+
+def format_trivia_sample(pack: Dict[str, Any]) -> Optional[str]:
+    questions = pack.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return None
+    first = questions[0]
+    if not isinstance(first, dict):
+        return sample_text(str(first))
+    prompt = first.get("question") or first.get("prompt") or first.get("text")
+    if prompt:
+        return sample_text(str(prompt))
+    return sample_text(json.dumps(first, ensure_ascii=False))
 
 
 def write_jsonl(path: str, records: Iterator[Dict[str, Any]]) -> int:
@@ -200,11 +297,21 @@ def load_souffle_trivia_facts(out_dir: str) -> List[Dict[str, Any]]:
     return facts
 
 
+def count_graph_edges_in_cypher(path: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    total = 0
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            total += line.count("[:")
+    return total
+
+
 # -----------------------------
 # Logic (Soufflé-style facts)
 # -----------------------------
 
-def gen_logic(parsed_path: str, out_facts: str, rules_src: str, rules_dst: str) -> None:
+def gen_logic(parsed_path: str, out_facts: str, rules_src: str, rules_dst: str) -> Dict[str, Any]:
     """
     Convert normalized extracted facts into a Soufflé-style fact file.
     Supports:
@@ -330,14 +437,18 @@ def gen_logic(parsed_path: str, out_facts: str, rules_src: str, rules_dst: str) 
         with open(rules_src, "r", encoding="utf-8") as f_in, open(rules_dst, "w", encoding="utf-8") as f_out:
             f_out.write(f_in.read())
 
-    log(f"[gen_logic] wrote {out_facts} counts={counts}")
+    return {
+        "facts_path": out_facts,
+        "rules_path": rules_dst if rules_src and rules_dst else None,
+        "counts": counts,
+    }
 
 
 # -----------------------------
 # Graph (Neo4j Cypher)
 # -----------------------------
 
-def gen_graph_cypher(parsed_path: str, verses_path: str, out_cypher: str) -> None:
+def gen_graph_cypher(parsed_path: str, verses_path: str, out_cypher: str) -> Dict[str, Any]:
     """
     Convert normalized extracted facts into a Neo4j load.cypher file.
 
@@ -615,7 +726,10 @@ def gen_graph_cypher(parsed_path: str, verses_path: str, out_cypher: str) -> Non
     with open(out_cypher, "w", encoding="utf-8") as f:
         f.writelines(stmts)
 
-    log(f"[gen_graph_cypher] wrote {out_cypher}")
+    return {
+        "cypher_path": out_cypher,
+        "edge_count": count_graph_edges_in_cypher(out_cypher),
+    }
 
 
 # -----------------------------
@@ -649,7 +763,7 @@ def run_trivia_robust(
     out_dir: str,
     strict: bool = False,
     translation: str = "WEB",
-) -> None:
+) -> Dict[str, Any]:
     """
     Generate trivia directly from the normalized extracted facts using the new
     extractors/question_engine.py path.
@@ -681,11 +795,16 @@ def run_trivia_robust(
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(pack, f, ensure_ascii=False, indent=2)
 
-        log(f"[trivia] wrote {out_path} questions={pack.get('question_count', 0)}")
-        return
+        return {
+            "out_path": out_path,
+            "question_count": pack.get("question_count", 0),
+            "pack": pack,
+            "used_souffle": bool(souffle_facts),
+            "source_dir": pipeline_out_dir if souffle_facts else parsed_path,
+        }
 
     except Exception as e:
-        log(f"[trivia] failed: {type(e).__name__}: {e}")
+        stage_log("trivia", f"failed {type(e).__name__}: {e}")
         if strict:
             raise
     from extractors.question_engine import load_json_or_jsonl, facts_to_trivia_pack
@@ -707,21 +826,43 @@ def run_trivia_robust(
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(pack, f, ensure_ascii=False, indent=2)
 
-    log(f"[trivia] wrote {out_path}")
+    return {
+        "out_path": out_path,
+        "question_count": pack.get("question_count", 0),
+        "pack": pack,
+        "used_souffle": False,
+        "source_dir": parsed_path,
+    }
 # -----------------------------
 # Pipeline
 # -----------------------------
 
-def run_pipeline(in_path: str, out_dir: str, strict: bool = False, no_trivia: bool = False, translation: str = "WEB") -> None:
+def run_pipeline(
+    in_path: str,
+    out_dir: str,
+    strict: bool = False,
+    no_trivia: bool = False,
+    translation: str = "WEB",
+    verbose: bool = False,
+) -> None:
     from extractors.bible_rule_engine import extract_facts
 
     os.makedirs(out_dir, exist_ok=True)
+
+    stage_log("summary", "pipeline start")
+    stage_log("summary", f"input       {in_path}")
+    stage_log("summary", f"output      {out_dir}")
+    stage_log("summary", f"translation {translation.upper()}")
 
     parsed = os.path.join(out_dir, "parsed.jsonl")
     drops = os.path.join(out_dir, "drops.jsonl")
 
     all_facts: List[Dict[str, Any]] = []
     all_drops: List[Dict[str, Any]] = []
+    fact_counts: Counter[str] = Counter()
+    sample_fact: Optional[Dict[str, Any]] = None
+
+    stage_log("extract", "start")
 
     for _, row in iter_jsonl(in_path):
         ref = row.get("ref")
@@ -738,6 +879,9 @@ def run_pipeline(in_path: str, out_dir: str, strict: bool = False, no_trivia: bo
             fact["norm"] = norm
             fact["translation"] = translation.upper()
             all_facts.append(fact)
+            fact_counts[str(fact.get("type", "unknown"))] += 1
+            if verbose and sample_fact is None:
+                sample_fact = dict(fact)
 
         for drop in drop_rows:
             drop["text"] = text
@@ -755,27 +899,68 @@ def run_pipeline(in_path: str, out_dir: str, strict: bool = False, no_trivia: bo
         for rec in all_drops:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-    log(f"[extract] wrote {parsed} facts={len(all_facts)} drops={len(all_drops)}")
+    stage_log("extract", f"done        facts={len(all_facts)} drops={len(all_drops)}")
+    stage_log("extract", f"files       {parsed} | {drops}")
+    stage_log("extract", f"types       {summarize_counts(dict(fact_counts))}")
+    if verbose and sample_fact is not None:
+        stage_log("extract", f"sample fact: {format_fact_sample(sample_fact)}")
 
-    gen_logic(
-    parsed,
-    os.path.join(out_dir, "logic", "facts.dl"),
-    None,
-    None,
-)
+    stage_log("logic", "start")
+    logic_meta = gen_logic(
+        parsed,
+        os.path.join(out_dir, "logic", "facts.dl"),
+        None,
+        None,
+    )
+    stage_log("logic", f"facts file  {logic_meta['facts_path']}")
+    stage_log("logic", f"relations   {summarize_counts(logic_meta['counts'])}")
 
-    gen_graph_cypher(parsed, in_path, os.path.join(out_dir, "graph", "load.cypher"))
+    stage_log("graph", "start")
+    graph_meta = gen_graph_cypher(parsed, in_path, os.path.join(out_dir, "graph", "load.cypher"))
+    stage_log("graph", f"cypher      {graph_meta['cypher_path']}")
+    stage_log("graph", f"edges       {graph_meta['edge_count']}")
 
+    csv_counts = collect_csv_row_counts(out_dir)
+    inferred_edges = sum(csv_counts.values())
+    if csv_counts:
+        stage_log("souffle", "output detected")
+        stage_log("souffle", f"csv rows    {summarize_counts(csv_counts)}")
+        if verbose:
+            for relation_csv in sorted(csv_counts):
+                relation = relation_csv[:-4]
+                sample_rows = load_souffle_relation(os.path.join(out_dir, relation_csv), relation)
+                if sample_rows:
+                    stage_log("souffle", f"sample row: {format_souffle_row_sample(relation, sample_rows[0])}")
+                    break
+    else:
+        stage_log("souffle", "no output detected")
+
+    trivia_count = 0
     if not no_trivia:
-        run_trivia_robust(
+        stage_log("trivia", "start")
+        trivia_meta = run_trivia_robust(
             parsed,
             in_path,
             os.path.join(out_dir, "trivia"),
             strict=strict,
             translation=translation,
         )
+        trivia_count = trivia_meta["question_count"]
+        source_label = "Souffle" if trivia_meta["used_souffle"] else "parsed facts"
+        stage_log("trivia", f"source      {source_label}")
+        stage_log("trivia", f"pack        {trivia_meta['out_path']}")
+        stage_log("trivia", f"questions   {trivia_count}")
+        if verbose:
+            trivia_sample = format_trivia_sample(trivia_meta["pack"])
+            if trivia_sample:
+                stage_log("trivia", f"sample question: {trivia_sample}")
     else:
-        log("[trivia] skipped (--no-trivia)")
+        stage_log("trivia", "skipped     (--no-trivia)")
+
+    stage_log(
+        "summary",
+        f"{len(all_facts)} extracted facts -> {inferred_edges} inferred edges -> {trivia_count} trivia questions",
+    )
 
 
 if __name__ == "__main__":
@@ -787,6 +972,7 @@ if __name__ == "__main__":
     ap.add_argument("--strict", action="store_true", help="Raise if trivia fails (default: keep going)")
     ap.add_argument("--no-trivia", action="store_true", help="Skip trivia generation entirely")
     ap.add_argument("--translation", default="WEB", choices=["WEB", "KJV"])
+    ap.add_argument("--verbose", action="store_true", help="Show sample facts and sample generated rows")
     args = ap.parse_args()
 
     run_pipeline(
@@ -795,4 +981,5 @@ if __name__ == "__main__":
         strict=args.strict,
         no_trivia=args.no_trivia,
         translation=args.translation,
+        verbose=args.verbose,
     )
