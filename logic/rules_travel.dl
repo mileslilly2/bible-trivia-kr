@@ -16,3 +16,7 @@ event_type(Eid, "visitation") :-
 event_type(Eid, "visitation") :-
     event_type(Eid, "travel"),
     recipient(Eid, _).
+
+travel_path(Start, Destination) :-
+    traveled_to(Start, Waypoint),
+    traveled_to(Waypoint, Destination).

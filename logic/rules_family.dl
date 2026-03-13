@@ -14,3 +14,18 @@ ancestor_of(Ancestor, Descendant) :-
 ancestor_of(Ancestor, Descendant) :-
     father(Ancestor, Parent),
     ancestor_of(Parent, Descendant).
+
+ancestor_of(Ancestor, Descendant) :-
+    parent_of(Ancestor, Descendant).
+
+ancestor_of(Ancestor, Descendant) :-
+    parent_of(Ancestor, Parent),
+    ancestor_of(Parent, Descendant).
+
+descendant_of(Descendant, Ancestor) :-
+    ancestor_of(Ancestor, Descendant).
+
+sibling(PersonA, PersonB) :-
+    parent_of(Parent, PersonA),
+    parent_of(Parent, PersonB),
+    PersonA != PersonB.

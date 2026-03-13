@@ -13,3 +13,14 @@ recipient(Message, Listener) :-
 event_type(Message, "direct_speech") :-
     agent(Message, _),
     recipient(Message, _).
+
+interacted_with(PersonA, PersonB) :-
+    spoke_to(PersonA, PersonB).
+
+interacted_with(PersonA, PersonB) :-
+    spoke_to(PersonB, PersonA).
+
+indirect_dialogue(PersonA, PersonC) :-
+    spoke_to(PersonA, PersonB),
+    spoke_to(PersonB, PersonC),
+    PersonA != PersonC.

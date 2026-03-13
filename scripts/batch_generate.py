@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import os
 import json
+import re
 from typing import Any, Dict, Iterator, Optional, Tuple, List
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,137 @@ def write_jsonl(path: str, records: Iterator[Dict[str, Any]]) -> int:
     return n
 
 
+SOUFFLE_RELATION_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "ancestor_of": ("ancestor", "descendant"),
+    "begat": ("father", "child"),
+    "father": ("father", "child"),
+    "event": ("eid",),
+    "event_type": ("eid", "event_type"),
+    "said": ("speaker", "listener", "message"),
+}
+
+SOUFFLE_TRIVIA_RELATIONS = ("ancestor_of", "begat", "father", "event", "event_type", "said")
+SOUFFLE_CALL_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\((.*)\)\s*$")
+
+
+def _split_souffle_args(args_src: str) -> List[str]:
+    args: List[str] = []
+    current: List[str] = []
+    in_quotes = False
+    escape = False
+
+    for ch in args_src:
+        if escape:
+            current.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            current.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            current.append(ch)
+            in_quotes = not in_quotes
+            continue
+        if ch == "," and not in_quotes:
+            args.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+
+    args.append("".join(current).strip())
+    return args
+
+
+def _parse_souffle_value(raw: str) -> str:
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+        try:
+            return json.loads(raw)
+        except Exception:
+            return raw[1:-1]
+    return raw
+
+
+def _parse_souffle_relation_line(line: str, relation: str) -> Optional[List[str]]:
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    match = SOUFFLE_CALL_RE.match(stripped.rstrip("."))
+    if match:
+        found_relation, args_src = match.groups()
+        if found_relation != relation:
+            return None
+        return [_parse_souffle_value(part) for part in _split_souffle_args(args_src)]
+
+    if "\t" in stripped:
+        return [part.strip() for part in stripped.split("\t")]
+
+    return [stripped]
+
+
+def load_souffle_relation(path: str, relation: str) -> List[Dict[str, Any]]:
+    fields = SOUFFLE_RELATION_FIELDS.get(relation)
+    if not fields or not os.path.exists(path):
+        return []
+
+    records: List[Dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        for raw in f:
+            values = _parse_souffle_relation_line(raw, relation)
+            if values is None:
+                continue
+            if len(values) < len(fields):
+                values += [""] * (len(fields) - len(values))
+            elif len(values) > len(fields):
+                values = values[: len(fields)]
+            rec: Dict[str, Any] = {"type": relation}
+            for field, value in zip(fields, values):
+                rec[field] = value
+            records.append(rec)
+    return records
+
+
+def load_souffle_trivia_facts(out_dir: str) -> List[Dict[str, Any]]:
+    facts: List[Dict[str, Any]] = []
+
+    for relation in SOUFFLE_TRIVIA_RELATIONS:
+        csv_path = os.path.join(out_dir, f"{relation}.csv")
+        for rec in load_souffle_relation(csv_path, relation):
+            facts.append(rec)
+
+            # Translate supported inferred relations into the existing
+            # extracted-fact schema expected by question_engine.
+            if relation in {"father", "begat"}:
+                father = rec.get("father")
+                child = rec.get("child")
+                if father and child:
+                    facts.append({
+                        "type": "parent_of",
+                        "parent": father,
+                        "child": child,
+                        "parent_gender": "male",
+                        "ref": "",
+                        "text": "",
+                        "norm": "",
+                    })
+            elif relation == "said":
+                speaker = rec.get("speaker")
+                listener = rec.get("listener")
+                if speaker and listener:
+                    facts.append({
+                        "type": "spoke_to",
+                        "speaker": speaker,
+                        "listener": listener,
+                        "ref": "",
+                        "text": "",
+                        "norm": "",
+                    })
+
+    return facts
+
+
 # -----------------------------
 # Logic (Soufflé-style facts)
 # -----------------------------
@@ -87,20 +219,7 @@ def gen_logic(parsed_path: str, out_facts: str, rules_src: str, rules_dst: str) 
     """
 
     lines: List[str] = [
-        "// Generated facts (robot)\n",
-        ".decl parent_of(parent:symbol, child:symbol)\n",
-        ".decl parent_gender(parent:symbol, gender:symbol)\n",
-        ".decl renamed_to(ref:symbol, name:symbol)\n",
-        ".decl killed(killer:symbol, victim:symbol)\n",
-        ".decl spoke_to(speaker:symbol, listener:symbol)\n",
-        ".decl traveled_to(traveler:symbol, destination:symbol)\n",
-        ".decl traveled_from_to(traveler:symbol, source:symbol, destination:symbol)\n",
-        ".decl role(person:symbol, role:symbol)\n",
-        ".decl reign_realm(person:symbol, realm:symbol)\n",
-        ".decl appeared_to(entity:symbol, recipient:symbol)\n",
-        ".decl manifestation(entity:symbol, form:symbol)\n",
-        ".decl fact_ref(kind:symbol, a:symbol, b:symbol, ref:symbol)\n",
-        "\n",
+        "// Generated facts\n",
     ]
 
     counts = {
@@ -205,9 +324,11 @@ def gen_logic(parsed_path: str, out_facts: str, rules_src: str, rules_dst: str) 
     with open(out_facts, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
-    ensure_dir_for(rules_dst)
-    with open(rules_src, "r", encoding="utf-8") as f_in, open(rules_dst, "w", encoding="utf-8") as f_out:
-        f_out.write(f_in.read())
+   # Skip copying rules since the project now uses modular logic files
+    if rules_src and rules_dst:
+        ensure_dir_for(rules_dst)
+        with open(rules_src, "r", encoding="utf-8") as f_in, open(rules_dst, "w", encoding="utf-8") as f_out:
+            f_out.write(f_in.read())
 
     log(f"[gen_logic] wrote {out_facts} counts={counts}")
 
@@ -538,7 +659,14 @@ def run_trivia_robust(
     os.makedirs(out_dir, exist_ok=True)
 
     try:
-        facts = load_json_or_jsonl(parsed_path)
+        pipeline_out_dir = str(Path(out_dir).resolve().parent)
+        souffle_facts = load_souffle_trivia_facts(pipeline_out_dir)
+        if souffle_facts:
+            facts = souffle_facts
+            log(f"[trivia] using Souffle output from {pipeline_out_dir}")
+        else:
+            facts = load_json_or_jsonl(parsed_path)
+            log(f"[trivia] Souffle output not found in {pipeline_out_dir}; falling back to {parsed_path}")
 
         pack = facts_to_trivia_pack(
             facts=facts,
@@ -630,11 +758,11 @@ def run_pipeline(in_path: str, out_dir: str, strict: bool = False, no_trivia: bo
     log(f"[extract] wrote {parsed} facts={len(all_facts)} drops={len(all_drops)}")
 
     gen_logic(
-        parsed,
-        os.path.join(out_dir, "logic", "facts.dl"),
-        os.path.join("logic", "rules.dl"),
-        os.path.join(out_dir, "logic", "rules.dl"),
-    )
+    parsed,
+    os.path.join(out_dir, "logic", "facts.dl"),
+    None,
+    None,
+)
 
     gen_graph_cypher(parsed, in_path, os.path.join(out_dir, "graph", "load.cypher"))
 

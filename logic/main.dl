@@ -1,5 +1,6 @@
-#include "facts.dl"
+
 #include "schema.dl"
+.include "facts.dl"
 
 #include "rules_family.dl"
 #include "rules_events.dl"
