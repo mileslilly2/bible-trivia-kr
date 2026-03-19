@@ -56,15 +56,16 @@ def ensure_dir_for(path: str) -> None:
         os.makedirs(d, exist_ok=True)
 
 
-STAGE_WIDTH = 9
-
-
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
 def stage_log(stage: str, msg: str) -> None:
-    log(f"[{stage:<{STAGE_WIDTH}}] {msg}")
+    log(f"[{stage}] {msg}")
+
+
+def stage_gap() -> None:
+    log("")
 
 
 def sample_text(value: str, limit: int = 96) -> str:
@@ -74,12 +75,96 @@ def sample_text(value: str, limit: int = 96) -> str:
     return text[: limit - 3] + "..."
 
 
-def summarize_counts(counts: Dict[str, int]) -> str:
+def _sorted_count_items(counts: Dict[str, int]) -> List[Tuple[str, int]]:
     items = [(name, count) for name, count in counts.items() if count]
+    items.sort(key=lambda item: (-item[1], item[0]))
+    return items
+
+
+def summarize_counts(counts: Dict[str, int]) -> str:
+    items = _sorted_count_items(counts)
     if not items:
         return "none"
-    items.sort(key=lambda item: (-item[1], item[0]))
-    return ", ".join(f"{name}={count}" for name, count in items)
+    return " ".join(f"{name}={count}" for name, count in items)
+
+
+def take_samples(records: List[Dict[str, Any]], limit: int = 3) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+    return [dict(rec) for rec in records[:limit]]
+
+
+def pick_varied_samples(records: List[Dict[str, Any]], key: str = "type", limit: int = 3) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    samples: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for rec in records:
+        label = str(rec.get(key, ""))
+        if label in seen:
+            continue
+        samples.append(dict(rec))
+        if label:
+            seen.add(label)
+        if len(samples) >= limit:
+            return samples
+
+    for rec in records:
+        if len(samples) >= limit:
+            break
+        if any(sample == rec for sample in samples):
+            continue
+        samples.append(dict(rec))
+
+    return samples
+
+
+def format_count_lines(
+    counts: Dict[str, int],
+    *,
+    preferred: Optional[Tuple[str, ...]] = None,
+    deemphasized: Optional[Tuple[str, ...]] = None,
+    include_all: bool = False,
+    max_lines: int = 2,
+    max_width: int = 88,
+) -> List[str]:
+    items = _sorted_count_items(counts)
+    if not items:
+        return ["none"]
+
+    preferred = preferred or ()
+    deemphasized = set(deemphasized or ())
+
+    preferred_items = [item for item in items if item[0] in preferred and item[0] not in deemphasized]
+    other_items = [item for item in items if item[0] not in preferred and item[0] not in deemphasized]
+    low_signal_items = [item for item in items if item[0] in deemphasized]
+
+    ordered = preferred_items + other_items
+    if include_all:
+        ordered += low_signal_items
+
+    if not ordered:
+        ordered = low_signal_items
+
+    lines: List[str] = []
+    current = ""
+    for name, count in ordered:
+        chunk = f"{name}={count}"
+        candidate = chunk if not current else f"{current} {chunk}"
+        if current and len(candidate) > max_width and len(lines) + 1 < max_lines:
+            lines.append(current)
+            current = chunk
+            continue
+        if current and len(candidate) > max_width:
+            break
+        current = candidate
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    return lines or ["none"]
 
 
 def count_csv_rows(path: str) -> int:
@@ -98,7 +183,7 @@ def collect_csv_row_counts(out_dir: str) -> Dict[str, int]:
             continue
         path = os.path.join(out_dir, name)
         if os.path.isfile(path):
-            counts[name] = count_csv_rows(path)
+            counts[name[:-4]] = count_csv_rows(path)
     return counts
 
 
@@ -124,23 +209,62 @@ def format_fact_sample(rec: Dict[str, Any]) -> str:
             parts.append(f"{key}={value}")
     if rec.get("ref"):
         parts.append(f"ref={rec['ref']}")
-    return sample_text(" ".join(parts))
+    return sample_text(" ".join(parts), limit=88)
 
 
 def format_souffle_row_sample(relation: str, rec: Dict[str, Any]) -> str:
     if relation == "ancestor_of":
-        return sample_text(f"ancestor_of {rec.get('ancestor', '')} -> {rec.get('descendant', '')}")
+        return sample_text(f"ancestor_of {rec.get('ancestor', '')} -> {rec.get('descendant', '')}", limit=88)
     if relation in {"begat", "father"}:
-        return sample_text(f"{relation} {rec.get('father', '')} -> {rec.get('child', '')}")
+        return sample_text(f"{relation} {rec.get('father', '')} -> {rec.get('child', '')}", limit=88)
     if relation == "event_type":
-        return sample_text(f"event_type {rec.get('eid', '')} = {rec.get('event_type', '')}")
+        return sample_text(f"event_type {rec.get('eid', '')} = {rec.get('event_type', '')}", limit=88)
     if relation == "agent":
-        return sample_text(f"agent {rec.get('eid', '')} -> {rec.get('agent', '')}")
+        return sample_text(f"agent {rec.get('eid', '')} -> {rec.get('agent', '')}", limit=88)
     if relation == "recipient":
-        return sample_text(f"recipient {rec.get('eid', '')} -> {rec.get('recipient', '')}")
+        return sample_text(f"recipient {rec.get('eid', '')} -> {rec.get('recipient', '')}", limit=88)
     if relation == "said":
-        return sample_text(f"said {rec.get('speaker', '')} -> {rec.get('listener', '')}")
-    return sample_text(json.dumps(rec, ensure_ascii=False))
+        return sample_text(f"said {rec.get('speaker', '')} -> {rec.get('listener', '')}", limit=88)
+    values = [str(value) for key, value in rec.items() if key != "type" and value not in (None, "")]
+    if len(values) >= 2:
+        return sample_text(f"{relation} {values[0]} -> {values[1]}", limit=88)
+    if len(values) == 1:
+        return sample_text(f"{relation} {values[0]}", limit=88)
+    return sample_text(json.dumps(rec, ensure_ascii=False), limit=88)
+
+
+def load_generic_csv_sample(path: str, relation: str) -> Optional[str]:
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        for raw in f:
+            row = raw.strip()
+            if not row:
+                continue
+            parts = [part.strip() for part in row.split("\t")]
+            if len(parts) >= 2:
+                return sample_text(f"{relation} {parts[0]} -> {parts[1]}")
+            return sample_text(f"{relation} {parts[0]}")
+    return None
+
+
+def load_souffle_samples(out_dir: str, limit: int = 3) -> List[str]:
+    samples: List[str] = []
+    csv_counts = collect_csv_row_counts(out_dir)
+    for relation, _ in sorted(csv_counts.items(), key=lambda item: (-item[1], item[0])):
+        path = os.path.join(out_dir, f"{relation}.csv")
+        rows = load_souffle_relation(path, relation)
+        if rows:
+            samples.append(format_souffle_row_sample(relation, rows[0]))
+            if len(samples) >= limit:
+                return samples
+            continue
+        sample_row = load_generic_csv_sample(path, relation)
+        if sample_row:
+            samples.append(sample_row)
+            if len(samples) >= limit:
+                return samples
+    return samples
 
 
 def format_trivia_sample(pack: Dict[str, Any]) -> Optional[str]:
@@ -152,8 +276,8 @@ def format_trivia_sample(pack: Dict[str, Any]) -> Optional[str]:
         return sample_text(str(first))
     prompt = first.get("question") or first.get("prompt") or first.get("text")
     if prompt:
-        return sample_text(str(prompt))
-    return sample_text(json.dumps(first, ensure_ascii=False))
+        return sample_text(str(prompt), limit=88)
+    return sample_text(json.dumps(first, ensure_ascii=False), limit=88)
 
 
 def write_jsonl(path: str, records: Iterator[Dict[str, Any]]) -> int:
@@ -777,10 +901,8 @@ def run_trivia_robust(
         souffle_facts = load_souffle_trivia_facts(pipeline_out_dir)
         if souffle_facts:
             facts = souffle_facts
-            log(f"[trivia] using Souffle output from {pipeline_out_dir}")
         else:
             facts = load_json_or_jsonl(parsed_path)
-            log(f"[trivia] Souffle output not found in {pipeline_out_dir}; falling back to {parsed_path}")
 
         pack = facts_to_trivia_pack(
             facts=facts,
@@ -849,10 +971,9 @@ def run_pipeline(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    stage_log("summary", "pipeline start")
-    stage_log("summary", f"input       {in_path}")
-    stage_log("summary", f"output      {out_dir}")
-    stage_log("summary", f"translation {translation.upper()}")
+    translation = translation.upper()
+    stage_log("pipeline", f"input={in_path} out={out_dir} translation={translation}")
+    stage_gap()
 
     parsed = os.path.join(out_dir, "parsed.jsonl")
     drops = os.path.join(out_dir, "drops.jsonl")
@@ -860,10 +981,6 @@ def run_pipeline(
     all_facts: List[Dict[str, Any]] = []
     all_drops: List[Dict[str, Any]] = []
     fact_counts: Counter[str] = Counter()
-    sample_fact: Optional[Dict[str, Any]] = None
-
-    stage_log("extract", "start")
-
     for _, row in iter_jsonl(in_path):
         ref = row.get("ref")
         text = row.get("text", "")
@@ -877,16 +994,14 @@ def run_pipeline(
         for fact in facts:
             fact["text"] = text
             fact["norm"] = norm
-            fact["translation"] = translation.upper()
+            fact["translation"] = translation
             all_facts.append(fact)
             fact_counts[str(fact.get("type", "unknown"))] += 1
-            if verbose and sample_fact is None:
-                sample_fact = dict(fact)
 
         for drop in drop_rows:
             drop["text"] = text
             drop["norm"] = norm
-            drop["translation"] = translation.upper()
+            drop["translation"] = translation
             all_drops.append(drop)
 
     ensure_dir_for(parsed)
@@ -899,45 +1014,62 @@ def run_pipeline(
         for rec in all_drops:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-    stage_log("extract", f"done        facts={len(all_facts)} drops={len(all_drops)}")
-    stage_log("extract", f"files       {parsed} | {drops}")
-    stage_log("extract", f"types       {summarize_counts(dict(fact_counts))}")
-    if verbose and sample_fact is not None:
-        stage_log("extract", f"sample fact: {format_fact_sample(sample_fact)}")
+    stage_log("extract", f"wrote {parsed} facts={len(all_facts)} drops={len(all_drops)}")
+    stage_log("extract", f"drops={drops}")
+    for line in format_count_lines(dict(fact_counts), include_all=verbose):
+        stage_log("extract", line)
+    if verbose:
+        for sample_fact in pick_varied_samples(all_facts, key="type", limit=3):
+            stage_log("extract", f"sample fact: {format_fact_sample(sample_fact)}")
 
-    stage_log("logic", "start")
+    stage_gap()
     logic_meta = gen_logic(
         parsed,
         os.path.join(out_dir, "logic", "facts.dl"),
         None,
         None,
     )
-    stage_log("logic", f"facts file  {logic_meta['facts_path']}")
-    stage_log("logic", f"relations   {summarize_counts(logic_meta['counts'])}")
+    stage_log("logic", f"wrote {logic_meta['facts_path']}")
+    for line in format_count_lines(logic_meta["counts"], deemphasized=("other",), include_all=verbose):
+        stage_log("logic", line)
 
-    stage_log("graph", "start")
+    stage_gap()
     graph_meta = gen_graph_cypher(parsed, in_path, os.path.join(out_dir, "graph", "load.cypher"))
-    stage_log("graph", f"cypher      {graph_meta['cypher_path']}")
-    stage_log("graph", f"edges       {graph_meta['edge_count']}")
+    stage_log("graph", f"wrote {graph_meta['cypher_path']} edges={graph_meta['edge_count']}")
 
     csv_counts = collect_csv_row_counts(out_dir)
     inferred_edges = sum(csv_counts.values())
     if csv_counts:
-        stage_log("souffle", "output detected")
-        stage_log("souffle", f"csv rows    {summarize_counts(csv_counts)}")
+        stage_gap()
+        stage_log("souffle", f"using inferred outputs from {out_dir}/")
+        for line in format_count_lines(
+            csv_counts,
+            preferred=(
+                "ancestor_of",
+                "descendant_of",
+                "indirect_dialogue",
+                "interacted_with",
+                "sibling",
+                "father",
+                "begat",
+                "participant",
+            ),
+            deemphasized=("fact_ref",),
+            include_all=verbose,
+        ):
+            stage_log("souffle", line)
+        if verbose and csv_counts.get("fact_ref"):
+            stage_log("souffle", f"debug fact_ref={csv_counts['fact_ref']}")
         if verbose:
-            for relation_csv in sorted(csv_counts):
-                relation = relation_csv[:-4]
-                sample_rows = load_souffle_relation(os.path.join(out_dir, relation_csv), relation)
-                if sample_rows:
-                    stage_log("souffle", f"sample row: {format_souffle_row_sample(relation, sample_rows[0])}")
-                    break
+            for sample_row in load_souffle_samples(out_dir, limit=3):
+                stage_log("souffle", f"sample row: {sample_row}")
     else:
-        stage_log("souffle", "no output detected")
+        stage_gap()
+        stage_log("souffle", "inferred outputs not found, falling back to parsed facts")
 
     trivia_count = 0
     if not no_trivia:
-        stage_log("trivia", "start")
+        stage_gap()
         trivia_meta = run_trivia_robust(
             parsed,
             in_path,
@@ -946,20 +1078,21 @@ def run_pipeline(
             translation=translation,
         )
         trivia_count = trivia_meta["question_count"]
-        source_label = "Souffle" if trivia_meta["used_souffle"] else "parsed facts"
-        stage_log("trivia", f"source      {source_label}")
-        stage_log("trivia", f"pack        {trivia_meta['out_path']}")
-        stage_log("trivia", f"questions   {trivia_count}")
+        source_label = "souffle" if trivia_meta["used_souffle"] else "parsed facts"
+        stage_log("trivia", f"source={source_label} path={trivia_meta['source_dir']}")
+        stage_log("trivia", f"wrote {trivia_meta['out_path']} questions={trivia_count}")
         if verbose:
             trivia_sample = format_trivia_sample(trivia_meta["pack"])
             if trivia_sample:
                 stage_log("trivia", f"sample question: {trivia_sample}")
     else:
-        stage_log("trivia", "skipped     (--no-trivia)")
+        stage_gap()
+        stage_log("trivia", "skipped (--no-trivia)")
 
+    stage_gap()
     stage_log(
         "summary",
-        f"{len(all_facts)} extracted facts -> {inferred_edges} inferred edges -> {trivia_count} trivia questions",
+        f"Bible text -> {len(all_facts)} facts -> {inferred_edges} symbolic relations -> {trivia_count} trivia questions",
     )
 
 
