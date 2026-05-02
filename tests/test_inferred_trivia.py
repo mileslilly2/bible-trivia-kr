@@ -87,6 +87,34 @@ def test_inferred_dialogue_filters_group_answers_from_choices():
         assert 0 <= question["answer_index"] < len(question["choices"])
 
 
+def test_dialogue_filters_demonyms_and_normalizes_divine_names():
+    facts = [
+        {"type": "parent_of", "parent": "Adam", "child": "Seth", "ref": "Genesis 5:3", "text": "", "norm": ""},
+        {"type": "parent_of", "parent": "Noah", "child": "Shem", "ref": "Genesis 5:32", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Yahweh", "listener": "Moses", "ref": "Exodus 4:4", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "LORD", "listener": "Aaron", "ref": "Exodus 4:28", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Moabitess", "listener": "Moses", "ref": "", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Israelites", "listener": "Aaron", "ref": "", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Miriam", "listener": "Aaron", "ref": "", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Joshua", "listener": "Aaron", "ref": "", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Samuel", "listener": "Aaron", "ref": "", "text": "", "norm": ""},
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=17)
+    dialogue_questions = [q for q in pack["questions"] if q["category"] == "Bible • Dialogue"]
+
+    assert dialogue_questions
+    for question in dialogue_questions:
+        rendered = " ".join([question["question"], *question["choices"]])
+        assert "Yahweh" not in rendered
+        assert "LORD" not in rendered
+        assert "Moabitess" not in rendered
+        assert "Israelites" not in rendered
+        assert len(question["choices"]) == 4
+        assert len(set(question["choices"])) == 4
+        assert 0 <= question["answer_index"] < len(question["choices"])
+
+
 def test_load_souffle_trivia_facts_attaches_safe_fact_ref_provenance(tmp_path):
     (tmp_path / "ancestor_of.csv").write_text("Abraham\tIsaac\nAbraham\tJacob\n", encoding="utf-8")
     (tmp_path / "descendant_of.csv").write_text("Isaac\tAbraham\n", encoding="utf-8")

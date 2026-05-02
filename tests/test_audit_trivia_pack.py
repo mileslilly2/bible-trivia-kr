@@ -49,6 +49,29 @@ def test_score_question_warns_for_quality_concerns():
     assert "suspicious_entity_name" in _codes(suspicious)
 
 
+def test_suspicious_entity_audit_uses_visible_dialogue_context():
+    genealogy = score_question(
+        _question(
+            category="Bible • Inferred Genealogy",
+            question="Who was a descendant of Judah?",
+            choices=["Judah", "Jacob", "Isaac", "David"],
+        )
+    )
+    assert "suspicious_entity_name" not in _codes(genealogy)
+
+    hidden_metadata = score_question(
+        _question(
+            question="Who spoke to Moses?",
+            choices=["God", "Aaron", "Joshua", "Miriam"],
+            meta={"fact": {"text": "The children of Israel gathered."}},
+        )
+    )
+    assert "suspicious_entity_name" not in _codes(hidden_metadata)
+
+    dialogue = score_question(_question(category="Bible • Dialogue", choices=["Israel", "Aaron", "Joshua", "Miriam"]))
+    assert "suspicious_entity_name" in _codes(dialogue)
+
+
 def test_audit_pack_reports_distributions_and_detectable_sources():
     pack = {
         "questions": [

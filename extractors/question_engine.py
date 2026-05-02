@@ -40,12 +40,16 @@ DIALOGUE_GROUP_NAMES = {
     "Israel", "Judah",
 }
 
+DIALOGUE_BAD_SUFFIXES = ("ites", "ite", "ess")
+DIALOGUE_PLURAL_SUFFIXES = ("ians", "eans", "ites", "im")
+
 DIVINE_CANON = {
-    "Yahweh": "Yahweh",
+    "Yahweh": "God",
     "God": "God",
-    "LORD": "LORD",
-    "angel of the LORD": "angel of the LORD",
-    "angel of Yahweh": "angel of Yahweh",
+    "LORD": "God",
+    "Lord": "God",
+    "angel of the LORD": "angel of God",
+    "angel of Yahweh": "angel of God",
     "angel of God": "angel of God",
 }
 
@@ -98,11 +102,25 @@ def normalize_form(s: Optional[str]) -> Optional[str]:
     return s
 
 
-def is_good_dialogue_person(s: Optional[str]) -> bool:
+def normalize_dialogue_name(s: Optional[str]) -> Optional[str]:
     s = normalize_choice_name(s)
+    if not s:
+        return None
+    return s
+
+
+def is_good_dialogue_person(s: Optional[str]) -> bool:
+    s = normalize_dialogue_name(s)
     if not is_good_name(s):
         return False
-    return s not in DIALOGUE_GROUP_NAMES
+    if s in DIALOGUE_GROUP_NAMES:
+        return False
+    lower = s.lower()
+    if " " not in s and lower.endswith(DIALOGUE_BAD_SUFFIXES):
+        return False
+    if " " not in s and lower.endswith(DIALOGUE_PLURAL_SUFFIXES):
+        return False
+    return True
 
 
 def _verse_or_fallback(ref: str, src_text: str, fallback: str) -> str:
@@ -253,8 +271,8 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
                 victims.add(victim)
 
         elif ftype == "spoke_to":
-            speaker = normalize_choice_name(f.get("speaker"))
-            listener = normalize_choice_name(f.get("listener"))
+            speaker = normalize_dialogue_name(f.get("speaker"))
+            listener = normalize_dialogue_name(f.get("listener"))
             if is_good_dialogue_person(speaker):
                 people.add(speaker)
                 speakers.add(speaker)
@@ -331,8 +349,8 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
                 people.add(sibling)
 
         elif ftype in {"interacted_with", "indirect_dialogue", "conversation_reach"}:
-            person = normalize_choice_name(f.get("person") or f.get("a"))
-            other = normalize_choice_name(f.get("other") or f.get("b") or f.get("reachable"))
+            person = normalize_dialogue_name(f.get("person") or f.get("a"))
+            other = normalize_dialogue_name(f.get("other") or f.get("b") or f.get("reachable"))
             if is_good_dialogue_person(person):
                 people.add(person)
                 speakers.add(person)
@@ -417,7 +435,10 @@ def _append_inferred_question(
     if not is_good_name(correct):
         return
 
-    distractors = _pick_distractors(rng, pools[pool_key] or pools["people"], correct, 3)
+    pool = pools[pool_key]
+    distractors = _pick_distractors(rng, pool, correct, 3)
+    if not distractors and pool_key != "people":
+        distractors = _pick_distractors(rng, pools["people"], correct, 3)
     if not distractors:
         return
 
@@ -571,8 +592,8 @@ def fact_to_questions(
 
     # ---------- spoke_to ----------
     if ftype == "spoke_to":
-        speaker = normalize_choice_name(fact.get("speaker"))
-        listener = normalize_choice_name(fact.get("listener"))
+        speaker = normalize_dialogue_name(fact.get("speaker"))
+        listener = normalize_dialogue_name(fact.get("listener"))
 
         if is_good_dialogue_person(listener) and is_good_dialogue_person(speaker):
             prompt = f"Who spoke to {listener}?"
@@ -830,8 +851,8 @@ def fact_to_questions(
 
     # ---------- inferred dialogue graph ----------
     if ftype == "interacted_with":
-        person = normalize_choice_name(fact.get("person") or fact.get("a"))
-        other = normalize_choice_name(fact.get("other") or fact.get("b"))
+        person = normalize_dialogue_name(fact.get("person") or fact.get("a"))
+        other = normalize_dialogue_name(fact.get("other") or fact.get("b"))
         if is_good_dialogue_person(person) and is_good_dialogue_person(other):
             _append_inferred_question(
                 out,
@@ -848,8 +869,8 @@ def fact_to_questions(
         return out
 
     if ftype == "indirect_dialogue":
-        person = normalize_choice_name(fact.get("person") or fact.get("a"))
-        other = normalize_choice_name(fact.get("other") or fact.get("b"))
+        person = normalize_dialogue_name(fact.get("person") or fact.get("a"))
+        other = normalize_dialogue_name(fact.get("other") or fact.get("b"))
         if is_good_dialogue_person(person) and is_good_dialogue_person(other):
             _append_inferred_question(
                 out,
@@ -866,8 +887,8 @@ def fact_to_questions(
         return out
 
     if ftype == "conversation_reach":
-        person = normalize_choice_name(fact.get("person") or fact.get("a"))
-        reachable = normalize_choice_name(fact.get("reachable") or fact.get("other") or fact.get("b"))
+        person = normalize_dialogue_name(fact.get("person") or fact.get("a"))
+        reachable = normalize_dialogue_name(fact.get("reachable") or fact.get("other") or fact.get("b"))
         if is_good_dialogue_person(person) and is_good_dialogue_person(reachable):
             _append_inferred_question(
                 out,

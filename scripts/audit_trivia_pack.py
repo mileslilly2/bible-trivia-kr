@@ -19,7 +19,7 @@ AWKWARD_QUESTION_PATTERNS = (
     "through the conversation graph rules",
 )
 
-SUSPICIOUS_ENTITY_NAMES = {
+SUSPICIOUS_DEMONYMS = {
     "ammonite",
     "ammonites",
     "edomite",
@@ -30,10 +30,8 @@ SUSPICIOUS_ENTITY_NAMES = {
     "gentiles",
     "hebrew",
     "hebrews",
-    "israel",
     "israelite",
     "israelites",
-    "judah",
     "judean",
     "judeans",
     "moabite",
@@ -42,6 +40,8 @@ SUSPICIOUS_ENTITY_NAMES = {
     "philistine",
     "philistines",
 }
+DIALOGUE_GROUP_NAMES = {"israel", "judah"}
+DIALOGUE_CATEGORIES = {"Bible • Dialogue", "Bible • Inferred Dialogue"}
 
 DIVINE_NAME_RE = re.compile(r"\b(?:Lord|LORD|Yahweh)\b")
 CAPITALIZED_RE = re.compile(r"\b[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*")
@@ -107,15 +107,26 @@ def _iter_text_fields(value: Any) -> Iterable[str]:
             yield from _iter_text_fields(child)
 
 
+def _visible_text(question: Dict[str, Any]) -> str:
+    return " ".join([_question_text(question), *[_clean_text(choice) for choice in _choices(question)]])
+
+
 def _find_suspicious_names(question: Dict[str, Any]) -> List[str]:
-    haystack = " ".join(_iter_text_fields(question))
+    haystack = _visible_text(question)
     tokens = {token.group(0) for token in re.finditer(r"\b[A-Za-z]+\b", haystack)}
-    return sorted(token for token in tokens if token.casefold() in SUSPICIOUS_ENTITY_NAMES)
+    category = _clean_text(question.get("category"))
+    suspicious = []
+    for token in tokens:
+        folded = token.casefold()
+        if folded in SUSPICIOUS_DEMONYMS:
+            suspicious.append(token)
+        elif category in DIALOGUE_CATEGORIES and folded in DIALOGUE_GROUP_NAMES:
+            suspicious.append(token)
+    return sorted(suspicious)
 
 
 def _divine_name_variants(question: Dict[str, Any]) -> List[str]:
-    haystack = " ".join(_iter_text_fields(question))
-    return sorted(set(DIVINE_NAME_RE.findall(haystack)))
+    return sorted(set(DIVINE_NAME_RE.findall(_visible_text(question))))
 
 
 def _question_template(question_text: str) -> str:
