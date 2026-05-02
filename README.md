@@ -1,236 +1,151 @@
 # bible-trivia-kr-min
 
-This repository implements a lightweight knowledge-engineering pipeline that converts Bible text into reusable structured knowledge using pattern extraction, Datalog inference (Soufflé), and graph projection.
+`bible-trivia-kr-min` is a lightweight Bible knowledge-engineering pipeline. It turns Bible verse text into extracted facts, projects those facts into Souffle-style logic and graph formats, and generates trivia packs as one downstream product.
 
-It is best understood as a small Bible knowledge-representation workbench: verse text is parsed into normalized facts, those facts can be projected into symbolic logic and graph formats, and downstream consumers such as trivia generation can reuse the same extracted knowledge.
+The core flow is:
+
+```text
+Bible text -> extracted facts -> Souffle facts/rules -> inferred relations -> graph/trivia exports
+```
 
 ## Project Overview
 
-The repository combines several related layers:
+This repository combines several related layers:
 
-- text-level extraction from Bible verses
+- pattern-based extraction from Bible verse text
 - normalized fact generation
-- symbolic inference via modular Soufflé Datalog rules
-- graph projection for Neo4j-style workflows
-- trivia pack generation as one downstream application
+- Souffle/Datalog knowledge representation and inference
+- Neo4j-style graph export
+- trivia pack generation from extracted or inferred knowledge
 
-The current runtime center of gravity is the Python extraction and export pipeline. The Soufflé layer is real and organized under `logic/`, but the wiring between extracted facts, modular rule files, and a fully automated Soufflé execution step is still evolving.
+The current runtime center of gravity is the Python extraction and export pipeline in `scripts/` and `extractors/`. The Souffle layer under `logic/` is a real inference layer, but the batch script currently stages facts and consumes inferred CSVs when present rather than fully orchestrating Souffle execution from start to finish.
 
 ## Purpose
 
-The goal of the project is not just to generate quiz questions. The broader purpose is to turn verse text into reusable symbolic knowledge that can support multiple consumers:
+The project is not only a trivia generator. Its broader purpose is to convert verse text into reusable symbolic knowledge that can support multiple consumers:
 
-- fact-oriented analytics and inspection
-- Datalog inference over normalized relations
-- graph loading and query workflows
-- trivia pack and question generation
+- inspection of extracted biblical facts
+- rule-based inference over normalized relations
+- graph loading and graph-query workflows
+- generated trivia packs and question databases
 
-Conceptually, the repository follows:
-
-`Text -> Facts -> Inference -> Applications`
-
-Or, in concrete file terms:
-
-`data/verses.jsonl -> out/parsed.jsonl -> out/logic/facts.dl + logic/main.dl -> inferred relations / graph export / trivia pack`
+Trivia is one useful output of the knowledge pipeline, not the whole architecture.
 
 ## High-Level Architecture
 
-### 1. Pattern extraction
+The active path has four main stages.
 
-Translation-specific regex extractors read verse text and emit normalized fact records. The active extraction logic lives in:
+1. `data/verses.jsonl` provides verse records.
+2. `extractors/` applies translation-specific regex rules and emits normalized facts.
+3. `scripts/batch_generate.py` writes extracted facts, Souffle facts, graph Cypher, and trivia output.
+4. `logic/main.dl`, `logic/schema.dl`, and `logic/rules_*.dl` define the modular inference program that can produce CSV relations for downstream use.
 
-- `extractors/patterns_web.py`
-- `extractors/patterns_kjv.py`
-- `extractors/bible_rule_engine.py`
-
-The rule engine selects extractors by translation and de-duplicates overlapping matches. Current normalized fact types include:
-
-- `parent_of`
-- `rename`
-- `spoke_to`
-- `killed`
-- `traveled`
-- `role`
-- `appeared_to`
-- `manifestation`
-
-### 2. Knowledge representation
-
-Extracted facts are persisted as JSON/JSONL and also exported into Soufflé-style fact declarations. The canonical logical schema and rule composition live in:
-
-- `logic/schema.dl`
-- `logic/main.dl`
-- `logic/rules_*.dl`
-
-### 3. Graph projection
-
-The batch pipeline projects extracted facts into Cypher for Neo4j-style graph loading. This makes the same extracted knowledge usable as a property graph, not just as flat JSON.
-
-### 4. Applications
-
-The repository currently has at least two concrete downstream knowledge consumers:
-
-- graph export under `out/graph/load.cypher`
-- trivia generation via `extractors/question_engine.py` and `scripts/export_trivia_pack.py`
+The same extracted knowledge can therefore be viewed as JSON records, Souffle facts, inferred Datalog relations, graph edges, or trivia questions.
 
 ## End-to-End Flow
 
-The intended pipeline is:
+The default batch command reads Bible text and writes the main generated artifacts:
 
-`verses.jsonl -> extracted facts -> Soufflé facts/rules -> inferred relations -> graph/trivia exports`
+```bash
+python scripts/batch_generate.py --in data/verses.jsonl --out out --translation WEB
+```
 
-More concretely:
+Typical outputs include:
 
-1. Input verses are read from `data/verses.jsonl`.
-2. `extractors/bible_rule_engine.py` applies translation-specific pattern extractors.
-3. The pipeline writes normalized extracted facts to `out/parsed.jsonl`.
-4. `scripts/batch_generate.py` exports Soufflé-style facts to `out/logic/facts.dl`.
-5. `logic/main.dl` composes `logic/schema.dl`, generated facts, and modular rule files.
-6. Inferred relations can be consumed from Soufflé CSV outputs when present.
-7. The same extracted or inferred knowledge can be projected to:
-   - graph export in `out/graph/load.cypher`
-   - trivia pack output in `out/trivia/trivia_pack.json`
+- `out/parsed.jsonl`: newline-delimited normalized extracted facts
+- `out/drops.jsonl`: extraction misses or dropped candidates
+- `out/logic/facts.dl`: generated Souffle facts
+- `out/graph/load.cypher`: generated graph load script
+- `out/trivia/trivia_pack.json`: generated trivia pack unless `--no-trivia` is used
 
-At a high level, the pipeline is a small neuro-symbolic style stack: regex extraction grounds symbolic facts in text, and Datalog rules add a second inference layer over those facts.
+After `out/logic/facts.dl` exists, the Souffle program can be run manually:
 
-## Soufflé / Inference Layer
+```bash
+souffle -D out -I out/logic logic/main.dl
+```
 
-The Soufflé program is modular rather than monolithic.
+That command uses `logic/main.dl` as the program entrypoint, reads generated facts from `out/logic`, and writes inferred CSV relations to `out`.
 
-`logic/main.dl` is the composition root. It includes:
+For more detailed pipeline logging:
 
-- `logic/schema.dl`
-- generated `facts.dl`
-- rule modules such as:
-  - `logic/rules_family.dl`
-  - `logic/rules_events.dl`
-  - `logic/rules_dialogue.dl`
-  - `logic/rules_roles.dl`
-  - `logic/rules_theophany.dl`
-  - `logic/rules_travel.dl`
-  - `logic/rules_locations.dl`
-  - `logic/rules_prophets.dl`
-  - `logic/rules_kings.dl`
+```bash
+python scripts/batch_generate.py --in data/verses.jsonl --out out --translation WEB --verbose
+```
 
-`logic/schema.dl` declares both extracted/base relations and derived relations. At the time of writing, it includes declarations for relations such as:
+## Souffle / Inference Layer
 
-- extracted/base-style relations:
-  - `parent_of`
-  - `spoke_to`
-  - `parent_gender`
-  - `renamed_to`
-  - `killed`
-  - `traveled_to`
-  - `traveled_from_to`
-  - `role`
-  - `reign_realm`
-  - `appeared_to`
-  - `manifestation`
-  - `fact_ref`
-- derived/inference-oriented relations:
-  - `begat`
-  - `father`
-  - `ancestor_of`
-  - `descendant_of`
-  - `sibling`
-  - `event`
-  - `event_type`
-  - `agent`
-  - `recipient`
-  - `participant`
-  - `travel_path`
-  - `said`
-  - `interacted_with`
-  - `indirect_dialogue`
+The inference layer is organized as a modular Souffle program.
 
-The rule modules do real inference work, for example:
+- `logic/main.dl` is the composition root.
+- `logic/schema.dl` declares shared base and derived relations.
+- `logic/rules_*.dl` contains focused rule modules.
+- `out/logic/facts.dl` is generated by the Python batch pipeline.
 
-- genealogy expansion from `parent_of` to `begat`, `father`, `ancestor_of`, and `descendant_of`
-- dialogue/event lifting from `spoke_to` into `said`, `event`, `agent`, and `recipient`
-- secondary categorization such as `theophany`, `divine_speech`, `royal_action`, `prophetic_speech`, and `visitation`
+`logic/main.dl` includes the schema, generated facts, and rule modules such as:
 
-Important practical note: the repository contains a real inference layer, but the default batch script currently stages logic facts rather than fully orchestrating a fresh Soufflé run itself. `scripts/batch_generate.py` will read inferred CSV outputs from the output directory if they already exist, and otherwise it falls back to parsed facts.
+- `logic/rules_family.dl`
+- `logic/rules_events.dl`
+- `logic/rules_dialogue.dl`
+- `logic/rules_roles.dl`
+- `logic/rules_theophany.dl`
+- `logic/rules_travel.dl`
+- `logic/rules_locations.dl`
+- `logic/rules_prophets.dl`
+- `logic/rules_kings.dl`
+
+`logic/schema.dl` currently declares extracted/base relations such as `parent_of`, `spoke_to`, `parent_gender`, `renamed_to`, `killed`, `traveled_to`, `traveled_from_to`, `role`, `reign_realm`, `appeared_to`, `manifestation`, and `fact_ref`.
+
+It also declares derived or inference-oriented relations such as `begat`, `father`, `ancestor_of`, `descendant_of`, `sibling`, `event`, `event_type`, `agent`, `recipient`, `participant`, `travel_path`, `said`, `interacted_with`, and `indirect_dialogue`.
+
+The rule modules perform inference including genealogy expansion, dialogue and event lifting, travel classification, role-related event categorization, theophany tagging, prophetic speech tagging, royal rule categorization, and location-oriented event categories.
 
 ## Graph Export
 
-`scripts/batch_generate.py` also emits `out/graph/load.cypher`.
+`scripts/batch_generate.py` writes a Neo4j-style graph load file to:
 
-The generated graph projection currently creates or links entities such as:
+```text
+out/graph/load.cypher
+```
 
-- `Human`
-- `Place`
-- `Role`
-- `Name`
-- `Verse`
-- `DivineEntity`
-- `ManifestationForm`
+The graph export is built from normalized extracted facts. It creates or links entities such as humans, places, roles, names, verses, divine entities, and manifestation forms. It also materializes relationships for parentage, speech, killing, travel, roles, reign realms, appearances, manifestations, and verse references.
 
-It also materializes typed edges such as:
-
-- `PARENT_OF`
-- `SPOKE_TO`
-- `KILLED`
-- `TRAVELED_FROM`
-- `TRAVELED_TO`
-- `HAS_ROLE`
-- `REIGNED_OVER`
-- `APPEARED_TO`
-- `MANIFESTED_AS`
-- `MENTIONED_IN`
-
-`graph/schema.cypher` contains optional Neo4j constraints for entity and event identifiers.
+`graph/schema.cypher` contains optional Neo4j constraints for entity and event identifiers. It is supporting schema material, not a replacement for the generated `out/graph/load.cypher` export.
 
 ## Trivia Generation
 
-Trivia generation is a downstream consumer of the extracted knowledge, not the architectural definition of the repository.
+Trivia generation is a downstream application of the extracted knowledge.
 
-The active question path is:
+The current trivia path uses:
 
 - `extractors/question_engine.py`
 - `scripts/export_trivia_pack.py`
 - `scripts/build_facts_db.py`
 - `scripts/generate_demo_questions.py`
 
-The question engine reads normalized parsed facts and generates multiple-choice questions with distractors, explanations, references, categories, and difficulty labels. It supports question families around:
+The question engine reads normalized facts and produces multiple-choice questions with options, answers, references, categories, explanations, and difficulty labels. Current question families include genealogy, names, dialogue, events, travel, roles, kingdoms, theophany, and manifestation forms.
 
-- genealogy
-- dialogue
-- violence/events
-- travel
-- roles and kingdoms
-- theophany / appearance
-- manifestation form
+`scripts/batch_generate.py` writes `out/trivia/trivia_pack.json` by default. If supported Souffle CSV outputs are already present in the output directory, the batch script can use those inferred relations for a subset of trivia generation; otherwise it falls back to parsed extracted facts.
 
-`scripts/batch_generate.py` can also use Soufflé-derived outputs for a subset of trivia generation when those inferred relation CSVs are present, translating supported relations such as `father`, `begat`, and `said` back into the current trivia fact schema.
-
-The repository also contains an older `trivia/generate_questions.py` path, which reflects an earlier schema and appears to be a legacy generation layer rather than the primary current runtime.
+The `trivia/` directory also contains an older question-generation path. Treat it as a legacy or auxiliary layer unless a task explicitly targets it.
 
 ## Repository Layout
 
-- `extractors/`
-  - Active extraction logic and the current trivia question engine.
-- `logic/`
-  - Soufflé schema, modular rule files, and Datalog entrypoint.
-- `graph/`
-  - Optional Cypher schema support for Neo4j.
-- `scripts/`
-  - Main pipeline scripts for extraction, export, and trivia packaging.
-- `trivia/`
-  - Older question-generation utilities.
-- `data/`
-  - Source verse text and example Bible data.
-- `tests/`
-  - Tests for extraction behavior.
-- `out/`
-  - Generated pipeline outputs.
-- `out_example/`
-  - Example generated artifacts.
-- `patterns/`, `ingest/`, `metaphor/`, `src/`, `souffle/`
-  - Older or auxiliary layers that exist in the repository but are not the primary happy-path pipeline described above.
+- `extractors/`: active extraction rules, rule-engine dispatch, and current question engine.
+- `scripts/`: command-line pipeline tools for extraction, export, trivia packs, and SQLite pack generation.
+- `logic/`: Souffle schema, modular rule files, and the `logic/main.dl` entrypoint.
+- `graph/`: optional Neo4j schema support.
+- `trivia/`: older or auxiliary trivia generation utilities.
+- `data/`: input verse data and raw/example Bible data.
+- `tests/`: extraction-focused tests.
+- `souffle/`: vendored or auxiliary Souffle-related material; the active project logic is in top-level `logic/`.
+
+Generated outputs are normally written under `out/`, which is created by the pipeline.
+
+Some older or prototype layers may still exist in the repository. Do not assume every directory participates in the current happy-path pipeline.
 
 ## Running the Pipeline
 
-### Environment setup
+Create an environment and install dependencies:
 
 ```bash
 python -m venv .venv
@@ -238,98 +153,81 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Main pipeline
+Run the main pipeline:
 
 ```bash
 python scripts/batch_generate.py --in data/verses.jsonl --out out --translation WEB
 ```
 
-This writes, at minimum:
+Run Souffle after generating `out/logic/facts.dl`:
 
-- `out/parsed.jsonl`
-- `out/drops.jsonl`
-- `out/logic/facts.dl`
-- `out/graph/load.cypher`
-- `out/trivia/trivia_pack.json` unless `--no-trivia` is used
+```bash
+souffle -D out -I out/logic logic/main.dl
+```
 
-Useful options:
+Run the pipeline with verbose stage logging:
 
 ```bash
 python scripts/batch_generate.py --in data/verses.jsonl --out out --translation WEB --verbose
-python scripts/batch_generate.py --in data/verses.jsonl --out out --translation KJV --no-trivia
 ```
 
-### Extraction only
+Run extraction only:
 
 ```bash
 python scripts/run_extraction.py --in data/verses.jsonl --facts-out out/parsed.jsonl --drops-out out/drops.jsonl --translation WEB
 ```
 
-Note: `scripts/run_extraction.py` writes JSON arrays, while `scripts/batch_generate.py` writes newline-delimited JSON to `out/parsed.jsonl`. The filename suffix alone does not guarantee the same serialization format.
-
-### Trivia pack JSON
+Export a trivia pack from parsed facts:
 
 ```bash
 python scripts/export_trivia_pack.py --input out/parsed.jsonl --output out/trivia_pack.json --pack-id bible-web-v1 --title "Bible Trivia Pack (WEB)" --translation WEB
 ```
 
-### Trivia pack SQLite
+Build a SQLite trivia pack database:
 
 ```bash
 python scripts/build_facts_db.py --input out/parsed.jsonl --output out/trivia_pack.sqlite --pack-id bible-web-v1 --title "Bible Trivia Pack (WEB)" --translation WEB
 ```
 
-### Demo question generation
-
-```bash
-python scripts/generate_demo_questions.py --input out/parsed.jsonl --output out/demo_questions.json --n 30
-```
-
-### Tests
+Run tests:
 
 ```bash
 pytest
 ```
 
+Note: `scripts/batch_generate.py` writes newline-delimited JSON to `out/parsed.jsonl`. `scripts/run_extraction.py` writes JSON arrays even when the output filename ends in `.jsonl`.
+
 ## Extending the Rule System
 
-When extending the symbolic layer, the current repository structure favors modular rules over one large logic file.
+When extending the symbolic layer, keep the modular Souffle layout intact.
 
-Recommended approach:
+Recommended workflow:
 
-1. Add shared relation declarations to `logic/schema.dl` if the relation is meant to be part of the common schema.
-2. Add a focused new `logic/rules_*.dl` module or extend the closest existing module.
-3. Include the new rule module from `logic/main.dl`.
-4. If the relation depends on extracted base facts, update the Python fact exporter in `scripts/batch_generate.py` in the same change.
-5. Check whether downstream consumers also need updates:
-   - trivia generation
-   - graph projection
-   - tests
+1. Add shared relation declarations and outputs to `logic/schema.dl` when the relation is part of the common logic schema.
+2. Add or update a focused `logic/rules_*.dl` module for derivation logic.
+3. Include any new rule module from `logic/main.dl`.
+4. If a rule depends on a newly exported base fact, update the fact exporter in `scripts/batch_generate.py`.
+5. Check downstream consumers that may need the new relation: graph export, trivia generation, tests, or generated packs.
 
-As a design rule, keep rule modules focused on derivation rather than fact declaration or output staging.
+Rule modules should focus on inference. Keep base fact declarations and shared output declarations centralized in `logic/schema.dl`.
 
 ## Current Limitations / Architectural Notes
 
-- The repository contains both older and newer layers. Not every directory participates in the default runtime path.
-- The Soufflé layer is real and structured, but default pipeline orchestration is still partial. The batch script exports facts and consumes inferred CSVs if present; it does not fully guarantee end-to-end Soufflé execution on its own.
-- Some downstream generation still relies directly on parsed extracted facts rather than only on inferred relations.
-- The active normalized extraction schema and some older scripts/tests are not perfectly aligned. For example, some legacy code still assumes older fact shapes.
-- `scripts/run_extraction.py` and `scripts/batch_generate.py` do not serialize `parsed.jsonl` in the same way.
-- The repository includes a vendored `souffle/` tree, but the active logical program for this project lives under the top-level `logic/` directory.
-
-These are normal signs of an evolving research/engineering codebase, but they are worth understanding before treating every directory as part of one fully unified production pipeline.
+- Souffle is a real inference layer, but `scripts/batch_generate.py` does not fully automate a fresh Souffle run. Generate facts with the batch script, run Souffle manually when needed, then rerun or consume outputs as appropriate.
+- The batch script reads inferred CSV relations from the output directory when they already exist and otherwise falls back to parsed facts for trivia generation.
+- Some outputs are based directly on extracted facts rather than exclusively on inferred relations.
+- Some older or prototype layers remain in the repository and may not match the current active schema.
+- The active logic entrypoint is `logic/main.dl`; do not assume a monolithic `logic/rules.dl` exists.
+- The generated fact names and Souffle schema must stay aligned. When adding relations, update extraction/export, schema, rules, and consumers together.
+- Current tests focus on extraction behavior, not full Souffle execution.
 
 ## Future Directions
 
-Natural next steps for the repository include:
+Natural next steps include:
 
-- fully wiring `logic/main.dl` into an automated Soufflé execution step from the batch pipeline
-- expanding extractor coverage beyond the current relation set
-- making inferred relations first-class inputs to trivia generation and graph export
-- improving schema consistency across extraction, logic, tests, and older utility scripts
-- adding tests for Soufflé execution and inference outputs, not only extraction behavior
-- broadening graph and database export options for downstream knowledge applications
-
-## Summary
-
-This repository is best viewed as a lightweight Bible knowledge-extraction and knowledge-representation pipeline. Trivia generation is one downstream application, but the core system is the reusable symbolic conversion of Bible verse text into normalized facts, inference-ready relations, and graph-friendly structure.
+- automate Souffle execution inside the batch pipeline around `logic/main.dl`
+- make inferred relations first-class inputs to graph and trivia generation
+- broaden extractor coverage across more relation types and books
+- add tests for Souffle inference outputs and end-to-end pipeline behavior
+- tighten schema consistency across extraction, logic, graph export, and trivia generation
+- expand graph/database export options for downstream knowledge applications

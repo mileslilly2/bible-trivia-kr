@@ -3,9 +3,11 @@
 ## Project Overview
 
 `bible-trivia-kr-min` is a lightweight Bible knowledge-engineering pipeline.
-It extracts structured facts from verse text, exports those facts into Soufflé-style logic facts and Neo4j Cypher, and generates trivia packs from the extracted facts.
+It extracts structured facts from verse text, exports those facts into Soufflé-style logic facts and Neo4j Cypher, runs or consumes Datalog inference outputs, and generates trivia packs from extracted or inferred knowledge.
 
-The current runtime center of gravity is the Python extraction and trivia pipeline. The Soufflé logic layer exists in `logic/`, but the default batch script does not fully wire the modular logic layout into a runnable Soufflé invocation.
+This is not just a trivia app. Trivia is one downstream product of a broader knowledge-extraction, knowledge-representation, inference, graph export, and trivia generation pipeline.
+
+The current runtime center of gravity is the Python extraction and export pipeline. The Soufflé logic layer in `logic/` is real and modular, but `scripts/batch_generate.py` stages facts and consumes inferred CSVs when present rather than fully orchestrating a fresh Soufflé run itself.
 
 ## Repository Architecture
 
@@ -14,7 +16,7 @@ Core areas:
 - `extractors/`
   - Translation-specific regex extraction lives in `extractors/patterns_web.py` and `extractors/patterns_kjv.py`.
   - `extractors/bible_rule_engine.py` selects extractors by translation and de-duplicates facts.
-  - `extractors/question_engine.py` generates trivia from extracted facts.
+  - `extractors/question_engine.py` generates downstream trivia from parsed facts or supported inferred facts.
 
 - `scripts/`
   - `scripts/run_extraction.py` runs extraction only.
@@ -25,7 +27,7 @@ Core areas:
 - `logic/`
   - `logic/schema.dl` holds the Soufflé relation declarations and outputs.
   - `logic/main.dl` is the modular entrypoint that includes `facts.dl`, `schema.dl`, and each rule module.
-  - `logic/rules_*.dl` contains domain-specific inference rules.
+  - `logic/rules_*.dl` contains domain-specific inference rules only.
 
 - `graph/`
   - `graph/schema.cypher` contains optional Neo4j schema support.
@@ -36,7 +38,28 @@ Core areas:
 - `tests/`
   - Current tests cover extraction behavior, not Soufflé execution.
 
+- `trivia/`
+  - Older or auxiliary trivia generation utilities. Do not treat this as the core runtime unless the task specifically targets it.
+
 Do not assume older prototype directories such as `metaphor/`, `patterns/`, `src/`, or the vendored `souffle/` tree are part of the active happy-path pipeline unless the task clearly requires them.
+
+## Current Pipeline Flow
+
+The working pipeline shape is:
+
+```text
+data/verses.jsonl -> out/parsed.jsonl -> out/logic/facts.dl -> Soufflé -> CSV relations -> graph + trivia
+```
+
+Current behavior:
+
+- `scripts/batch_generate.py` reads `data/verses.jsonl` and writes `out/parsed.jsonl`.
+- The same script exports facts-only Soufflé input to `out/logic/facts.dl`.
+- Soufflé can be run manually with `logic/main.dl` to produce CSV relations under `out/`.
+- The batch script reads inferred CSV outputs if present; otherwise trivia generation falls back to parsed facts.
+- Graph export currently comes from normalized extracted facts and is written to `out/graph/load.cypher`.
+
+Do not describe the repository as if trivia generation is the primary architecture. The primary architecture is extraction -> representation -> inference -> exports.
 
 ## Soufflé Logic Structure
 
@@ -55,19 +78,14 @@ Do not assume older prototype directories such as `metaphor/`, `patterns/`, `src
   - `rules_prophets.dl`
   - `rules_kings.dl`
 
-`logic/schema.dl` currently declares the logical core:
+`logic/schema.dl` currently declares base extracted relations and derived inference relations, including:
 
-- genealogy relations: `begat`, `father`, `ancestor_of`
-- event relations: `event`, `event_type`, `agent`, `recipient`
-- dialogue relation: `said`
+- base/extracted relations: `parent_of`, `spoke_to`, `parent_gender`, `renamed_to`, `killed`, `traveled_to`, `traveled_from_to`, `role`, `reign_realm`, `appeared_to`, `manifestation`, `fact_ref`
+- genealogy relations: `begat`, `father`, `ancestor_of`, `descendant_of`, `sibling`
+- event relations: `event`, `event_type`, `agent`, `recipient`, `participant`, `travel_path`
+- dialogue relations: `said`, `interacted_with`, `indirect_dialogue`
 
-`logic/schema.dl` also owns the current `.output` declarations:
-
-- `father`
-- `ancestor_of`
-- `event_type`
-- `agent`
-- `recipient`
+`logic/schema.dl` also owns the shared `.output` declarations.
 
 Rule-module responsibilities:
 
@@ -83,10 +101,10 @@ Rule-module responsibilities:
 
 Important limitation:
 
-- `scripts/batch_generate.py` exports `out/logic/facts.dl`, but it currently tries to copy `logic/rules.dl` into the output tree.
-- There is no `logic/rules.dl` in the repository.
+- `scripts/batch_generate.py` exports `out/logic/facts.dl`, but it does not run Soufflé itself.
 - The actual modular Soufflé entrypoint is `logic/main.dl`.
-- Do not assume the batch pipeline currently executes or correctly stages the modular Soufflé program.
+- There is no monolithic `logic/rules.dl` in the active logic layout.
+- Do not assume the batch pipeline currently executes the modular Soufflé program.
 
 ## Pipeline Commands
 
@@ -102,6 +120,18 @@ Main pipeline:
 
 ```bash
 python scripts/batch_generate.py --in data/verses.jsonl --out out --translation WEB
+```
+
+Manual Soufflé run after generating `out/logic/facts.dl`:
+
+```bash
+souffle -D out -I out/logic logic/main.dl
+```
+
+Verbose pipeline logging:
+
+```bash
+python scripts/batch_generate.py --in data/verses.jsonl --out out --translation WEB --verbose
 ```
 
 Extraction only:
@@ -139,10 +169,12 @@ Be careful with output-format assumptions:
 When editing `logic/rules_*.dl`:
 
 - Keep rule modules focused on derivation only.
-- Do not add base fact declarations to rule modules.
-- Do not add `.output` declarations to rule modules unless the schema strategy is intentionally being changed across the repo.
+- Do not add `.decl` declarations to rule modules.
+- Do not add `.output` declarations to rule modules.
 - Prefer adding a new `rules_*.dl` file plus one include in `logic/main.dl` over overloading unrelated modules.
-- Build new rules only on relations that already exist in `schema.dl`, `facts.dl`, or earlier derivations.
+- Build new rules only on relations that are declared in `logic/schema.dl`.
+- If a new relation is used in a rule, declare it in `logic/schema.dl` first.
+- Keep relation arity identical across `logic/schema.dl`, generated `facts.dl`, and every rule use.
 - Preserve the current modular include pattern in `logic/main.dl`.
 
 Before changing relation names or semantics in a rule module, check all downstream consumers:
@@ -161,19 +193,56 @@ Do not silently replace the current modular entrypoint with a different architec
 
 Rules:
 
-- Put shared `.decl` definitions in `logic/schema.dl`.
+- All `.decl` statements MUST live in `logic/schema.dl`.
 - Put shared `.output` definitions in `logic/schema.dl`.
+- `logic/rules_*.dl` files MUST contain rules only.
+- Generated `out/logic/facts.dl` MUST contain facts only. Do not emit `.decl` or `.output` into generated facts.
 - Keep declaration names and arities stable unless the corresponding facts exporter and rule modules are updated together.
 - If you introduce a new base or shared derived relation, declare it in `logic/schema.dl` first, then use it from rule modules.
 - If a relation is only meaningful because a generator exports it, update the generator and schema in the same change.
+- Arity must match across schema declarations, generated facts, and rule bodies/heads.
 
 Current reality to preserve:
 
-- `logic/schema.dl` declares `begat`, `father`, `ancestor_of`, `event`, `event_type`, `agent`, `recipient`, and `said`.
-- The batch exporter currently emits a separate generated `facts.dl` file with declarations such as `parent_of`, `killed`, `spoke_to`, `traveled_to`, `role`, `appeared_to`, and `manifestation`.
-- Those generated fact names do not currently match the relations used by `logic/schema.dl` and `logic/main.dl`.
+- `logic/schema.dl` declares both exported base fact relations and derived relations.
+- `scripts/batch_generate.py` emits generated facts such as `parent_of(...)`, `killed(...)`, `spoke_to(...)`, `traveled_to(...)`, `role(...)`, `appeared_to(...)`, `manifestation(...)`, and `fact_ref(...)`.
+- Those generated fact names must match declarations in `logic/schema.dl` and uses in `logic/rules_*.dl`.
 
-If you are asked to fix or extend the Soufflé pipeline, treat that mismatch as a real integration issue and resolve it explicitly instead of papering over it in docs or comments.
+If you are asked to fix or extend the Soufflé pipeline, treat schema/rule/fact mismatches as real integration issues and resolve them explicitly instead of papering over them in docs or comments.
+
+## Common Failure Modes
+
+- `Undefined relation`: the relation is used in a rule or facts file but is missing a `.decl` in `logic/schema.dl`.
+- `Redefinition of relation`: a `.decl` was duplicated in generated `facts.dl` or a `logic/rules_*.dl` file.
+- Arity mismatch: the number of columns differs between `logic/schema.dl`, generated facts, and rule usage.
+- Missing facts include: `logic/main.dl` includes `facts.dl`; run Soufflé with `-I out/logic` after generating `out/logic/facts.dl`.
+- Wrong output expectation: trivia can fall back to `out/parsed.jsonl` when inferred Soufflé CSV outputs are absent.
+
+## Logging Changes
+
+- Pipeline logging belongs in `scripts/batch_generate.py`.
+- Prefer clean stage-based logs: `[extract]`, `[logic]`, `[souffle]`, `[graph]`, `[trivia]`, `[summary]`.
+- Keep routine logs concise and stable.
+- Put noisy debug output, sample rows, and detailed counts behind `--verbose`.
+- Do not add ad hoc print debugging in extractors, rule modules, or trivia code when stage logging would be clearer.
+
+## Trivia Generation Changes
+
+- Trivia is downstream of the knowledge pipeline. Do not reshape the whole repository around trivia.
+- Prefer consuming supported Soufflé CSV outputs when they are available.
+- Preserve the parsed-fact fallback path for runs without inferred CSVs.
+- Maintain question schema consistency in `extractors/question_engine.py`.
+- Preserve references and metadata fields such as `ref`, `translation`, `category`, `difficulty`, explanations, and answer options.
+- If adding a new inferred relation for trivia, update the Soufflé adapter and question generation path together.
+
+## Safe Edit Rules
+
+- Prefer modifying existing files in place.
+- Do not rename files or move core entrypoints unless explicitly requested.
+- Do not introduce new architecture layers without instruction.
+- Keep changes minimal, local, and testable.
+- For pipeline changes, update docs and tests alongside behavior when practical.
+- For Soufflé changes, verify schema, facts, rules, and command examples remain aligned.
 
 ## Working Style for This Repo
 
