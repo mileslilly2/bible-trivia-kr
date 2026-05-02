@@ -292,6 +292,11 @@ def write_jsonl(path: str, records: Iterator[Dict[str, Any]]) -> int:
 
 SOUFFLE_RELATION_FIELDS: Dict[str, Tuple[str, ...]] = {
     "ancestor_of": ("ancestor", "descendant"),
+    "descendant_of": ("descendant", "ancestor"),
+    "sibling": ("person", "sibling"),
+    "interacted_with": ("person", "other"),
+    "indirect_dialogue": ("person", "other"),
+    "conversation_reach": ("person", "reachable"),
     "begat": ("father", "child"),
     "father": ("father", "child"),
     "event": ("eid",),
@@ -299,7 +304,22 @@ SOUFFLE_RELATION_FIELDS: Dict[str, Tuple[str, ...]] = {
     "said": ("speaker", "listener", "message"),
 }
 
-SOUFFLE_TRIVIA_RELATIONS = ("ancestor_of", "begat", "father", "event", "event_type", "said")
+SOUFFLE_INFERRED_TRIVIA_RELATIONS = (
+    "ancestor_of",
+    "descendant_of",
+    "sibling",
+    "interacted_with",
+    "indirect_dialogue",
+    "conversation_reach",
+)
+SOUFFLE_RAW_COMPAT_RELATIONS = ("begat", "father", "said")
+SOUFFLE_TRIVIA_RELATIONS = SOUFFLE_INFERRED_TRIVIA_RELATIONS + SOUFFLE_RAW_COMPAT_RELATIONS
+SOUFFLE_TRIVIA_CAPS = {
+    "ancestor_of": 300,
+    "descendant_of": 300,
+    "sibling": 200,
+}
+SOUFFLE_DIALOGUE_TRIVIA_CAP = 300
 SOUFFLE_CALL_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\((.*)\)\s*$")
 
 
@@ -382,14 +402,45 @@ def load_souffle_relation(path: str, relation: str) -> List[Dict[str, Any]]:
     return records
 
 
-def load_souffle_trivia_facts(out_dir: str) -> List[Dict[str, Any]]:
-    facts: List[Dict[str, Any]] = []
+def _souffle_trivia_fact(rec: Dict[str, Any], relation: str) -> Dict[str, Any]:
+    fact = dict(rec)
+    fact.update({
+        "type": relation,
+        "ref": "",
+        "text": "",
+        "norm": "",
+        "source": "souffle",
+    })
+    return fact
 
-    for relation in SOUFFLE_TRIVIA_RELATIONS:
+
+def load_souffle_trivia_facts(out_dir: str) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    facts: List[Dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    dialogue_loaded = 0
+
+    for relation in SOUFFLE_INFERRED_TRIVIA_RELATIONS:
+        csv_path = os.path.join(out_dir, f"{relation}.csv")
+        rows = load_souffle_relation(csv_path, relation)
+        if not rows:
+            continue
+
+        cap = SOUFFLE_TRIVIA_CAPS.get(relation)
+        if relation in {"interacted_with", "indirect_dialogue", "conversation_reach"}:
+            remaining = max(SOUFFLE_DIALOGUE_TRIVIA_CAP - dialogue_loaded, 0)
+            cap = remaining if cap is None else min(cap, remaining)
+        selected = rows[:cap] if cap is not None else rows
+
+        for rec in selected:
+            facts.append(_souffle_trivia_fact(rec, relation))
+            counts[relation] += 1
+
+        if relation in {"interacted_with", "indirect_dialogue", "conversation_reach"}:
+            dialogue_loaded += len(selected)
+
+    for relation in SOUFFLE_RAW_COMPAT_RELATIONS:
         csv_path = os.path.join(out_dir, f"{relation}.csv")
         for rec in load_souffle_relation(csv_path, relation):
-            facts.append(rec)
-
             # Translate supported inferred relations into the existing
             # extracted-fact schema expected by question_engine.
             if relation in {"father", "begat"}:
@@ -404,7 +455,9 @@ def load_souffle_trivia_facts(out_dir: str) -> List[Dict[str, Any]]:
                         "ref": "",
                         "text": "",
                         "norm": "",
+                        "source": "souffle",
                     })
+                    counts[relation] += 1
             elif relation == "said":
                 speaker = rec.get("speaker")
                 listener = rec.get("listener")
@@ -416,9 +469,11 @@ def load_souffle_trivia_facts(out_dir: str) -> List[Dict[str, Any]]:
                         "ref": "",
                         "text": "",
                         "norm": "",
+                        "source": "souffle",
                     })
+                    counts[relation] += 1
 
-    return facts
+    return facts, dict(counts)
 
 
 def count_graph_edges_in_cypher(path: str) -> int:
@@ -898,11 +953,9 @@ def run_trivia_robust(
 
     try:
         pipeline_out_dir = str(Path(out_dir).resolve().parent)
-        souffle_facts = load_souffle_trivia_facts(pipeline_out_dir)
-        if souffle_facts:
-            facts = souffle_facts
-        else:
-            facts = load_json_or_jsonl(parsed_path)
+        parsed_facts = load_json_or_jsonl(parsed_path)
+        souffle_facts, souffle_counts = load_souffle_trivia_facts(pipeline_out_dir)
+        facts = parsed_facts + souffle_facts
 
         pack = facts_to_trivia_pack(
             facts=facts,
@@ -913,6 +966,13 @@ def run_trivia_robust(
             seed=42,
         )
 
+        inferred_question_count = 0
+        for question in pack.get("questions", []):
+            meta = question.get("meta") if isinstance(question, dict) else None
+            fact = meta.get("fact") if isinstance(meta, dict) else None
+            if isinstance(fact, dict) and fact.get("source") == "souffle":
+                inferred_question_count += 1
+
         out_path = os.path.join(out_dir, "trivia_pack.json")
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(pack, f, ensure_ascii=False, indent=2)
@@ -920,6 +980,8 @@ def run_trivia_robust(
         return {
             "out_path": out_path,
             "question_count": pack.get("question_count", 0),
+            "inferred_question_count": inferred_question_count,
+            "inferred_fact_counts": souffle_counts,
             "pack": pack,
             "used_souffle": bool(souffle_facts),
             "source_dir": pipeline_out_dir if souffle_facts else parsed_path,
@@ -1078,7 +1140,12 @@ def run_pipeline(
             translation=translation,
         )
         trivia_count = trivia_meta["question_count"]
-        source_label = "souffle" if trivia_meta["used_souffle"] else "parsed facts"
+        source_label = "parsed facts + souffle" if trivia_meta["used_souffle"] else "parsed facts"
+        inferred_counts = trivia_meta.get("inferred_fact_counts", {})
+        if inferred_counts:
+            stage_log("trivia", f"inferred facts loaded {summarize_counts(inferred_counts)}")
+        if trivia_meta.get("inferred_question_count"):
+            stage_log("trivia", f"inferred questions added={trivia_meta['inferred_question_count']}")
         stage_log("trivia", f"source={source_label} path={trivia_meta['source_dir']}")
         stage_log("trivia", f"wrote {trivia_meta['out_path']} questions={trivia_count}")
         if verbose:

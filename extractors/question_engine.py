@@ -246,6 +246,40 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
             if form:
                 forms.add(form)
 
+        elif ftype == "ancestor_of":
+            ancestor = normalize_choice_name(f.get("ancestor"))
+            descendant = normalize_choice_name(f.get("descendant"))
+            if is_good_name(ancestor):
+                people.add(ancestor)
+            if is_good_name(descendant):
+                people.add(descendant)
+
+        elif ftype == "descendant_of":
+            descendant = normalize_choice_name(f.get("descendant"))
+            ancestor = normalize_choice_name(f.get("ancestor"))
+            if is_good_name(descendant):
+                people.add(descendant)
+            if is_good_name(ancestor):
+                people.add(ancestor)
+
+        elif ftype == "sibling":
+            person = normalize_choice_name(f.get("person") or f.get("person1"))
+            sibling = normalize_choice_name(f.get("sibling") or f.get("person2"))
+            if is_good_name(person):
+                people.add(person)
+            if is_good_name(sibling):
+                people.add(sibling)
+
+        elif ftype in {"interacted_with", "indirect_dialogue", "conversation_reach"}:
+            person = normalize_choice_name(f.get("person") or f.get("a"))
+            other = normalize_choice_name(f.get("other") or f.get("b") or f.get("reachable"))
+            if is_good_name(person):
+                people.add(person)
+                speakers.add(person)
+            if is_good_name(other):
+                people.add(other)
+                listeners.add(other)
+
     return {
         "people": sorted(people),
         "parent_male": sorted(parent_male),
@@ -291,6 +325,54 @@ def choices_look_clean(choices: List[str]) -> bool:
 # -----------------------------
 # Fact → MC questions
 # -----------------------------
+
+
+INFERRED_TEMPLATE_LIMITS = {
+    "ancestor_of": 300,
+    "descendant_of": 300,
+    "sibling": 200,
+    "interacted_with": 300,
+    "indirect_dialogue": 300,
+    "conversation_reach": 300,
+}
+
+
+def _append_inferred_question(
+    out: List[MCQuestion],
+    *,
+    rng: random.Random,
+    pools: Dict[str, List[str]],
+    fact: Dict[str, Any],
+    qtype: str,
+    prompt: str,
+    correct: str,
+    explanation: str,
+    category: str,
+    difficulty: str = "medium",
+) -> None:
+    if not is_good_name(correct):
+        return
+
+    distractors = _pick_distractors(rng, pools["people"], correct, 3)
+    if not distractors:
+        return
+
+    choices = distractors + [correct]
+    rng.shuffle(choices)
+    if not choices_look_clean(choices):
+        return
+
+    out.append(MCQuestion(
+        id=_stable_id(qtype, correct, prompt),
+        prompt=prompt,
+        choices=choices,
+        answer_index=choices.index(correct),
+        explanation=explanation,
+        ref=fact.get("ref", ""),
+        category=category,
+        difficulty=difficulty,
+        meta={"fact": fact, "norm": fact.get("norm", "")},
+    ))
 
 def fact_to_questions(
     fact: Dict[str, Any],
@@ -624,6 +706,110 @@ def fact_to_questions(
                     ))
         return out
 
+    # ---------- inferred genealogy ----------
+    if ftype == "ancestor_of":
+        ancestor = normalize_choice_name(fact.get("ancestor"))
+        descendant = normalize_choice_name(fact.get("descendant"))
+        if is_good_name(ancestor) and is_good_name(descendant):
+            _append_inferred_question(
+                out,
+                rng=rng,
+                pools=pools,
+                fact=fact,
+                qtype="ancestor_of",
+                prompt=f"Who was an ancestor of {descendant}?",
+                correct=ancestor,
+                explanation=f"{ancestor} is inferred as an ancestor of {descendant} by the Soufflé genealogy rules.",
+                category="Bible • Inferred Genealogy",
+            )
+        return out
+
+    if ftype == "descendant_of":
+        descendant = normalize_choice_name(fact.get("descendant"))
+        ancestor = normalize_choice_name(fact.get("ancestor"))
+        if is_good_name(descendant) and is_good_name(ancestor):
+            _append_inferred_question(
+                out,
+                rng=rng,
+                pools=pools,
+                fact=fact,
+                qtype="descendant_of",
+                prompt=f"Who was a descendant of {ancestor}?",
+                correct=descendant,
+                explanation=f"{descendant} is inferred as a descendant of {ancestor} by the Soufflé genealogy rules.",
+                category="Bible • Inferred Genealogy",
+            )
+        return out
+
+    if ftype == "sibling":
+        person = normalize_choice_name(fact.get("person") or fact.get("person1"))
+        sibling = normalize_choice_name(fact.get("sibling") or fact.get("person2"))
+        if is_good_name(person) and is_good_name(sibling):
+            _append_inferred_question(
+                out,
+                rng=rng,
+                pools=pools,
+                fact=fact,
+                qtype="sibling",
+                prompt=f"Who was a sibling of {person}?",
+                correct=sibling,
+                explanation=f"{sibling} is inferred as a sibling of {person} by the Soufflé genealogy rules.",
+                category="Bible • Inferred Genealogy",
+            )
+        return out
+
+    # ---------- inferred dialogue graph ----------
+    if ftype == "interacted_with":
+        person = normalize_choice_name(fact.get("person") or fact.get("a"))
+        other = normalize_choice_name(fact.get("other") or fact.get("b"))
+        if is_good_name(person) and is_good_name(other):
+            _append_inferred_question(
+                out,
+                rng=rng,
+                pools=pools,
+                fact=fact,
+                qtype="interacted_with",
+                prompt=f"Who interacted with {person}?",
+                correct=other,
+                explanation=f"{other} is inferred as having interacted with {person} by the Soufflé dialogue rules.",
+                category="Bible • Inferred Dialogue",
+            )
+        return out
+
+    if ftype == "indirect_dialogue":
+        person = normalize_choice_name(fact.get("person") or fact.get("a"))
+        other = normalize_choice_name(fact.get("other") or fact.get("b"))
+        if is_good_name(person) and is_good_name(other):
+            _append_inferred_question(
+                out,
+                rng=rng,
+                pools=pools,
+                fact=fact,
+                qtype="indirect_dialogue",
+                prompt=f"Who was indirectly connected in dialogue to {person}?",
+                correct=other,
+                explanation=f"{other} is inferred as indirectly connected in dialogue to {person} by the Soufflé dialogue rules.",
+                category="Bible • Inferred Dialogue",
+            )
+        return out
+
+    if ftype == "conversation_reach":
+        person = normalize_choice_name(fact.get("person") or fact.get("a"))
+        reachable = normalize_choice_name(fact.get("reachable") or fact.get("other") or fact.get("b"))
+        if is_good_name(person) and is_good_name(reachable):
+            _append_inferred_question(
+                out,
+                rng=rng,
+                pools=pools,
+                fact=fact,
+                qtype="conversation_reach",
+                prompt=f"Who could be reached through the conversation graph from {person}?",
+                correct=reachable,
+                explanation=f"{reachable} is inferred as reachable from {person} through the Soufflé conversation graph rules.",
+                category="Bible • Inferred Dialogue",
+            )
+        return out
+
     return out
 
 
@@ -668,7 +854,8 @@ def generate_questions(
                 template_key = (ftype, q.prompt.split("?")[0].lower())
 
             template_counts[template_key] = template_counts.get(template_key, 0) + 1
-            if template_counts[template_key] > 25:
+            template_limit = INFERRED_TEMPLATE_LIMITS.get(ftype, 25)
+            if template_counts[template_key] > template_limit:
                 continue
 
             if not choices_look_clean(q.choices):
