@@ -443,6 +443,60 @@ def _sibling_refs(fact_refs: Dict[Tuple[str, str, str], List[str]], person: str,
     return _unique_refs(refs)
 
 
+def _parent_edges(fact_refs: Dict[Tuple[str, str, str], List[str]]) -> Dict[str, List[str]]:
+    edges: Dict[str, List[str]] = defaultdict(list)
+    for relation, parent, child in fact_refs:
+        if relation == "parent_of" and child not in edges[parent]:
+            edges[parent].append(child)
+    return {parent: sorted(children) for parent, children in edges.items()}
+
+
+def _genealogy_chain(
+    fact_refs: Dict[Tuple[str, str, str], List[str]],
+    ancestor: str,
+    descendant: str,
+    max_depth: int = 4,
+) -> List[str]:
+    if not ancestor or not descendant or ancestor == descendant:
+        return []
+
+    edges = _parent_edges(fact_refs)
+    queue: List[List[str]] = [[ancestor]]
+    seen = {ancestor}
+
+    while queue:
+        path = queue.pop(0)
+        if len(path) - 1 >= max_depth:
+            continue
+        for child in edges.get(path[-1], []):
+            if child in seen:
+                continue
+            next_path = path + [child]
+            if child == descendant:
+                return next_path
+            seen.add(child)
+            queue.append(next_path)
+    return []
+
+
+def _refs_for_genealogy_chain(fact_refs: Dict[Tuple[str, str, str], List[str]], chain: List[str]) -> List[str]:
+    refs: List[str] = []
+    for parent, child in zip(chain, chain[1:]):
+        refs.extend(_refs_for_key(fact_refs, "parent_of", parent, child))
+    return _unique_refs(refs)
+
+
+def _shared_parent_context(fact_refs: Dict[Tuple[str, str, str], List[str]], person: str, sibling: str) -> Optional[str]:
+    parent_children: Dict[str, set] = defaultdict(set)
+    for relation, parent, child in fact_refs:
+        if relation == "parent_of":
+            parent_children[parent].add(child)
+    for parent, children in parent_children.items():
+        if person in children and sibling in children:
+            return parent
+    return None
+
+
 def _provenance_refs_for_fact(fact_refs: Dict[Tuple[str, str, str], List[str]], relation: str, rec: Dict[str, Any]) -> List[str]:
     if relation == "ancestor_of":
         return _refs_for_key(fact_refs, "parent_of", rec.get("ancestor", ""), rec.get("descendant", ""))
@@ -464,6 +518,31 @@ def _provenance_refs_for_fact(fact_refs: Dict[Tuple[str, str, str], List[str]], 
     if relation == "said":
         return _refs_for_key(fact_refs, "spoke_to", rec.get("speaker", ""), rec.get("listener", ""))
     return []
+
+
+def _apply_inferred_context(
+    fact: Dict[str, Any],
+    fact_refs: Dict[Tuple[str, str, str], List[str]],
+    relation: str,
+    rec: Dict[str, Any],
+) -> Dict[str, Any]:
+    if relation == "ancestor_of":
+        chain = _genealogy_chain(fact_refs, rec.get("ancestor", ""), rec.get("descendant", ""))
+        if chain:
+            fact["genealogy_chain"] = chain
+            fact["genealogy_depth"] = len(chain) - 1
+            _apply_provenance(fact, _refs_for_genealogy_chain(fact_refs, chain))
+    elif relation == "descendant_of":
+        chain = _genealogy_chain(fact_refs, rec.get("ancestor", ""), rec.get("descendant", ""))
+        if chain:
+            fact["genealogy_chain"] = chain
+            fact["genealogy_depth"] = len(chain) - 1
+            _apply_provenance(fact, _refs_for_genealogy_chain(fact_refs, chain))
+    elif relation == "sibling":
+        shared_parent = _shared_parent_context(fact_refs, rec.get("person", ""), rec.get("sibling", ""))
+        if shared_parent:
+            fact["shared_parent"] = shared_parent
+    return fact
 
 
 def _apply_provenance(fact: Dict[str, Any], refs: List[str]) -> Dict[str, Any]:
@@ -489,6 +568,7 @@ def _souffle_trivia_fact(
     })
     if fact_refs is not None:
         _apply_provenance(fact, _provenance_refs_for_fact(fact_refs, relation, rec))
+        _apply_inferred_context(fact, fact_refs, relation, rec)
     return fact
 
 

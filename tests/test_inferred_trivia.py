@@ -13,10 +13,32 @@ def _base_people():
 
 def test_inferred_facts_generate_valid_pack_schema():
     facts = _base_people() + [
-        {"type": "ancestor_of", "ancestor": "Abraham", "descendant": "Jacob", "ref": "", "text": "", "norm": "", "source": "souffle"},
-        {"type": "descendant_of", "descendant": "Jacob", "ancestor": "Abraham", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {
+            "type": "ancestor_of",
+            "ancestor": "Abraham",
+            "descendant": "Jacob",
+            "ref": "Genesis 21:3; Genesis 25:26",
+            "text": "",
+            "norm": "",
+            "source": "souffle",
+            "provenance_refs": ["Genesis 21:3", "Genesis 25:26"],
+            "genealogy_chain": ["Abraham", "Isaac", "Jacob"],
+            "genealogy_depth": 2,
+        },
+        {
+            "type": "descendant_of",
+            "descendant": "Jacob",
+            "ancestor": "Abraham",
+            "ref": "Genesis 21:3; Genesis 25:26",
+            "text": "",
+            "norm": "",
+            "source": "souffle",
+            "provenance_refs": ["Genesis 21:3", "Genesis 25:26"],
+            "genealogy_chain": ["Abraham", "Isaac", "Jacob"],
+            "genealogy_depth": 2,
+        },
         {"type": "sibling", "person": "Moses", "sibling": "Aaron", "ref": "", "text": "", "norm": "", "source": "souffle"},
-        {"type": "interacted_with", "person": "Moses", "other": "Pharaoh", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {"type": "interacted_with", "person": "Moses", "other": "Pharaoh", "ref": "Exodus 4:28", "text": "", "norm": "", "source": "souffle", "provenance_refs": ["Exodus 4:28"]},
         {"type": "indirect_dialogue", "person": "Abraham", "other": "Joseph", "ref": "", "text": "", "norm": "", "source": "souffle"},
         {"type": "conversation_reach", "person": "Moses", "reachable": "Joshua", "ref": "", "text": "", "norm": "", "source": "souffle"},
     ]
@@ -40,11 +62,46 @@ def test_inferred_facts_generate_valid_pack_schema():
         assert question["explanation"].strip() != ":"
 
     inferred_explanations = {q["meta"]["fact"]["type"]: q["explanation"] for q in inferred_questions}
-    assert "inferred as an ancestor" in inferred_explanations["ancestor_of"]
-    assert "inferred as a descendant" in inferred_explanations["descendant_of"]
+    assert "genealogy chain: Abraham -> Isaac -> Jacob" in inferred_explanations["ancestor_of"]
+    assert "genealogy chain: Abraham -> Isaac -> Jacob" in inferred_explanations["descendant_of"]
     assert "share a parent" in inferred_explanations["sibling"]
-    assert "through a dialogue relation" in inferred_explanations["interacted_with"]
-    assert "through the dialogue graph" in inferred_explanations["indirect_dialogue"]
+    assert "recorded speech" in inferred_explanations["interacted_with"]
+    for question in pack["questions"]:
+        assert "interacted with" not in question["question"].lower()
+        assert "indirectly connected in dialogue" not in question["question"].lower()
+    assert "indirect_dialogue" not in inferred_explanations
+    assert "conversation_reach" not in inferred_explanations
+
+
+def test_ungrounded_long_inferred_genealogy_is_filtered_out():
+    facts = _base_people() + [
+        {"type": "ancestor_of", "ancestor": "Jacob", "descendant": "Ram", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {"type": "descendant_of", "descendant": "Ram", "ancestor": "Jacob", "ref": "", "text": "", "norm": "", "source": "souffle"},
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=13)
+
+    inferred_types = {q["meta"].get("fact", {}).get("type") for q in pack["questions"] if q["meta"].get("fact", {}).get("source") == "souffle"}
+    assert "ancestor_of" not in inferred_types
+    assert "descendant_of" not in inferred_types
+
+
+def test_no_graph_like_inferred_dialogue_questions_are_generated():
+    facts = _base_people() + [
+        {"type": "interacted_with", "person": "Moses", "other": "Pharaoh", "ref": "Exodus 4:28", "text": "", "norm": "", "source": "souffle", "provenance_refs": ["Exodus 4:28"]},
+        {"type": "indirect_dialogue", "person": "Abraham", "other": "Joseph", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {"type": "conversation_reach", "person": "Moses", "reachable": "Joshua", "ref": "", "text": "", "norm": "", "source": "souffle"},
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=19)
+
+    questions = [q["question"].lower() for q in pack["questions"]]
+    assert all("interacted with" not in question for question in questions)
+    assert all("indirectly connected in dialogue" not in question for question in questions)
+    inferred_types = [q["meta"].get("fact", {}).get("type") for q in pack["questions"] if q["meta"].get("fact", {}).get("source") == "souffle"]
+    assert "interacted_with" in inferred_types
+    assert "indirect_dialogue" not in inferred_types
+    assert "conversation_reach" not in inferred_types
 
 
 def test_empty_extracted_dialogue_explanation_uses_fallback_sentence():
@@ -71,8 +128,8 @@ def test_inferred_dialogue_filters_group_answers_from_choices():
     facts = _base_people() + [
         {"type": "interacted_with", "person": "Moses", "other": "Israel", "ref": "", "text": "", "norm": "", "source": "souffle"},
         {"type": "interacted_with", "person": "Moses", "other": "Judah", "ref": "", "text": "", "norm": "", "source": "souffle"},
-        {"type": "interacted_with", "person": "Moses", "other": "Pharaoh", "ref": "", "text": "", "norm": "", "source": "souffle"},
-        {"type": "interacted_with", "person": "Aaron", "other": "Joshua", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {"type": "interacted_with", "person": "Moses", "other": "Pharaoh", "ref": "Exodus 4:28", "text": "", "norm": "", "source": "souffle", "provenance_refs": ["Exodus 4:28"]},
+        {"type": "interacted_with", "person": "Aaron", "other": "Joshua", "ref": "Numbers 27:18", "text": "", "norm": "", "source": "souffle", "provenance_refs": ["Numbers 27:18"]},
     ]
 
     pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=11)
@@ -149,6 +206,28 @@ def test_load_souffle_trivia_facts_attaches_safe_fact_ref_provenance(tmp_path):
     assert reach["ref"] == "Deuteronomy 31:7"
     assert sibling["ref"] == "Genesis 21:3; Genesis 16:15"
     assert sibling["provenance_refs"] == ["Genesis 21:3", "Genesis 16:15"]
+
+
+def test_load_souffle_trivia_facts_attaches_genealogy_chain_context(tmp_path):
+    (tmp_path / "ancestor_of.csv").write_text("Jacob\tRam\n", encoding="utf-8")
+    (tmp_path / "descendant_of.csv").write_text("Ram\tJacob\n", encoding="utf-8")
+    (tmp_path / "fact_ref.csv").write_text(
+        "parent_of\tJacob\tJudah\tGenesis 29:35\n"
+        "parent_of\tJudah\tPerez\tGenesis 38:29\n"
+        "parent_of\tPerez\tHezron\tRuth 4:18\n"
+        "parent_of\tHezron\tRam\tRuth 4:19\n",
+        encoding="utf-8",
+    )
+
+    facts, _ = load_souffle_trivia_facts(str(tmp_path))
+    ancestor = next(f for f in facts if f["type"] == "ancestor_of")
+    descendant = next(f for f in facts if f["type"] == "descendant_of")
+
+    assert ancestor["genealogy_chain"] == ["Jacob", "Judah", "Perez", "Hezron", "Ram"]
+    assert ancestor["genealogy_depth"] == 4
+    assert ancestor["ref"] == "Genesis 29:35; Genesis 38:29"
+    assert ancestor["provenance_refs"] == ["Genesis 29:35", "Genesis 38:29", "Ruth 4:18", "Ruth 4:19"]
+    assert descendant["genealogy_chain"] == ["Jacob", "Judah", "Perez", "Hezron", "Ram"]
 
 
 def test_inferred_question_meta_includes_provenance_refs_when_available():

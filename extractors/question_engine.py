@@ -145,6 +145,41 @@ def _inferred_explanation(base: str, fact: Dict[str, Any]) -> str:
     return base + "."
 
 
+def _chain_text(chain: List[str]) -> str:
+    return " -> ".join(chain)
+
+
+def _genealogy_explanation(relation: str, answer: str, target: str, fact: Dict[str, Any]) -> str:
+    chain = fact.get("genealogy_chain") or []
+    if chain:
+        if relation == "ancestor_of":
+            return f"{answer} is inferred as an ancestor of {target} through the genealogy chain: {_chain_text(chain)}."
+        return f"{answer} is inferred as a descendant of {target} through the genealogy chain: {_chain_text(chain)}."
+    return _inferred_explanation(f"{answer} is inferred in the genealogy relation for {target}", fact)
+
+
+def _sibling_explanation(person: str, sibling: str, fact: Dict[str, Any]) -> str:
+    shared_parent = fact.get("shared_parent")
+    if shared_parent:
+        return _inferred_explanation(f"{person} and {sibling} are inferred as siblings because they share {shared_parent} as a parent", fact)
+    return _inferred_explanation(f"{person} and {sibling} are inferred as siblings because they share a parent", fact)
+
+
+def _has_grounded_genealogy(fact: Dict[str, Any]) -> bool:
+    depth = fact.get("genealogy_depth") or (len(fact.get("genealogy_chain", [])) - 1)
+    has_refs = bool(fact.get("provenance_refs"))
+
+    # If it's a long hop (> 2) and we don't have direct verse refs for it, filter it.
+    if depth > 2 and not has_refs:
+        return False
+
+    # Needs at least some grounding (either a short hop or a verse ref)
+    if not has_refs and depth <= 0:
+        return False
+
+    return True
+
+
 def _fact_explanation(ftype: str, ref: str, src_text: str, **parts: str) -> str:
     if ftype == "rename":
         return _verse_or_fallback(ref, src_text, f"{parts['name']} is the recorded name in this extracted naming fact.")
@@ -216,10 +251,12 @@ def load_json_or_jsonl(path: str | Path):
 
 
 # -----------------------------
-# Pools for distractors
+# Pools and importance
 # -----------------------------
 
-def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    from collections import Counter
+    name_counts: Counter[str] = Counter()
     people = set()
     parent_male = set()
     parent_female = set()
@@ -360,6 +397,15 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
                 listeners.add(other)
                 dialogue_people.add(other)
 
+    # Count narrative presence from extracted/grounded facts
+    for f in facts:
+        if f.get("source") == "souffle" or f.get("inferred"):
+            continue
+        for key in ("parent", "child", "speaker", "listener", "killer", "victim", "traveler", "person", "entity", "recipient"):
+            val = normalize_choice_name(f.get(key))
+            if is_good_name(val):
+                name_counts[val] += 1
+
     return {
         "people": sorted(people),
         "parent_male": sorted(parent_male),
@@ -377,6 +423,7 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         "victims": sorted(victims),
         "travelers": sorted(travelers),
         "appearance_recipients": sorted(appearance_recipients),
+        "name_counts": name_counts,
     }
 
 
@@ -435,6 +482,12 @@ def _append_inferred_question(
     if not is_good_name(correct):
         return
 
+    # Filter obscure names for inferred questions. 
+    # Must have appeared at least once in extracted facts.
+    name_counts = pools.get("name_counts")
+    if name_counts and name_counts.get(correct, 0) < 1:
+        return
+
     pool = pools[pool_key]
     distractors = _pick_distractors(rng, pool, correct, 3)
     if not distractors and pool_key != "people":
@@ -452,6 +505,9 @@ def _append_inferred_question(
     if provenance_refs:
         meta["provenance_refs"] = provenance_refs
         meta["inferred"] = True
+    for key in ("genealogy_chain", "genealogy_depth", "shared_parent"):
+        if key in fact:
+            meta[key] = fact[key]
 
     out.append(MCQuestion(
         id=_stable_id(qtype, correct, prompt),
@@ -801,7 +857,7 @@ def fact_to_questions(
     if ftype == "ancestor_of":
         ancestor = normalize_choice_name(fact.get("ancestor"))
         descendant = normalize_choice_name(fact.get("descendant"))
-        if is_good_name(ancestor) and is_good_name(descendant):
+        if is_good_name(ancestor) and is_good_name(descendant) and _has_grounded_genealogy(fact):
             _append_inferred_question(
                 out,
                 rng=rng,
@@ -810,7 +866,7 @@ def fact_to_questions(
                 qtype="ancestor_of",
                 prompt=f"Who was an ancestor of {descendant}?",
                 correct=ancestor,
-                explanation=_inferred_explanation(f"{ancestor} is inferred as an ancestor of {descendant} by the Soufflé genealogy rules", fact),
+                explanation=_genealogy_explanation("ancestor_of", ancestor, descendant, fact),
                 category="Bible • Inferred Genealogy",
             )
         return out
@@ -818,7 +874,7 @@ def fact_to_questions(
     if ftype == "descendant_of":
         descendant = normalize_choice_name(fact.get("descendant"))
         ancestor = normalize_choice_name(fact.get("ancestor"))
-        if is_good_name(descendant) and is_good_name(ancestor):
+        if is_good_name(descendant) and is_good_name(ancestor) and _has_grounded_genealogy(fact):
             _append_inferred_question(
                 out,
                 rng=rng,
@@ -827,7 +883,7 @@ def fact_to_questions(
                 qtype="descendant_of",
                 prompt=f"Who was a descendant of {ancestor}?",
                 correct=descendant,
-                explanation=_inferred_explanation(f"{descendant} is inferred as a descendant of {ancestor} by the Soufflé genealogy rules", fact),
+                explanation=_genealogy_explanation("descendant_of", descendant, ancestor, fact),
                 category="Bible • Inferred Genealogy",
             )
         return out
@@ -844,7 +900,7 @@ def fact_to_questions(
                 qtype="sibling",
                 prompt=f"Who was a sibling of {person}?",
                 correct=sibling,
-                explanation=_inferred_explanation(f"{person} and {sibling} are inferred as siblings because they share a parent", fact),
+                explanation=_sibling_explanation(person, sibling, fact),
                 category="Bible • Inferred Genealogy",
             )
         return out
@@ -853,7 +909,7 @@ def fact_to_questions(
     if ftype == "interacted_with":
         person = normalize_dialogue_name(fact.get("person") or fact.get("a"))
         other = normalize_dialogue_name(fact.get("other") or fact.get("b"))
-        if is_good_dialogue_person(person) and is_good_dialogue_person(other):
+        if is_good_dialogue_person(person) and is_good_dialogue_person(other) and fact.get("ref"):
             _append_inferred_question(
                 out,
                 rng=rng,
@@ -861,47 +917,14 @@ def fact_to_questions(
                 fact=fact,
                 qtype="interacted_with",
                 pool_key="dialogue_people",
-                prompt=f"Who interacted with {person}?",
+                prompt=f"Who is recorded as speaking with {person} in the cited passage?",
                 correct=other,
-                explanation=_inferred_explanation(f"{other} is connected to {person} through a dialogue relation", fact),
+                explanation=_inferred_explanation(f"{other} and {person} are linked through a chain of recorded speech interactions in the cited passages", fact),
                 category="Bible • Inferred Dialogue",
             )
         return out
 
-    if ftype == "indirect_dialogue":
-        person = normalize_dialogue_name(fact.get("person") or fact.get("a"))
-        other = normalize_dialogue_name(fact.get("other") or fact.get("b"))
-        if is_good_dialogue_person(person) and is_good_dialogue_person(other):
-            _append_inferred_question(
-                out,
-                rng=rng,
-                pools=pools,
-                fact=fact,
-                qtype="indirect_dialogue",
-                pool_key="dialogue_people",
-                prompt=f"Who was indirectly connected in dialogue to {person}?",
-                correct=other,
-                explanation=_inferred_explanation(f"{other} is indirectly connected to {person} through the dialogue graph", fact),
-                category="Bible • Inferred Dialogue",
-            )
-        return out
-
-    if ftype == "conversation_reach":
-        person = normalize_dialogue_name(fact.get("person") or fact.get("a"))
-        reachable = normalize_dialogue_name(fact.get("reachable") or fact.get("other") or fact.get("b"))
-        if is_good_dialogue_person(person) and is_good_dialogue_person(reachable):
-            _append_inferred_question(
-                out,
-                rng=rng,
-                pools=pools,
-                fact=fact,
-                qtype="conversation_reach",
-                pool_key="dialogue_people",
-                prompt=f"Who was indirectly connected in dialogue to {person}?",
-                correct=reachable,
-                explanation=_inferred_explanation(f"{reachable} is indirectly connected to {person} through the dialogue graph", fact),
-                category="Bible • Inferred Dialogue",
-            )
+    if ftype in {"indirect_dialogue", "conversation_reach"}:
         return out
 
     return out
