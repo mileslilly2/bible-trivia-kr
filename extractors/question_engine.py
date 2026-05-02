@@ -33,7 +33,11 @@ TITLE_PREFIXES = {
 }
 
 BAD_SINGLE_TOKENS = {
-    "Ethiopian", "Bethlehemite", "Hushathite",
+    "Ethiopian", "Bethlehemite", "Hushathite", "Moabite", "Moabitess",
+}
+
+DIALOGUE_GROUP_NAMES = {
+    "Israel", "Judah",
 }
 
 DIVINE_CANON = {
@@ -92,6 +96,52 @@ def normalize_form(s: Optional[str]) -> Optional[str]:
     if not s:
         return None
     return s
+
+
+def is_good_dialogue_person(s: Optional[str]) -> bool:
+    s = normalize_choice_name(s)
+    if not is_good_name(s):
+        return False
+    return s not in DIALOGUE_GROUP_NAMES
+
+
+def _verse_or_fallback(ref: str, src_text: str, fallback: str) -> str:
+    ref = (ref or "").strip()
+    src_text = (src_text or "").strip()
+    if ref and src_text:
+        return f"{ref}: {src_text}"
+    if src_text:
+        return src_text
+    return fallback
+
+
+def _parent_explanation(parent: str, child: str, parent_gender: Optional[str], ref: str, src_text: str) -> str:
+    relation = "mother" if parent_gender == "female" else "father" if parent_gender == "male" else "parent"
+    return _verse_or_fallback(ref, src_text, f"{parent} is recorded as the {relation} of {child}.")
+
+
+def _fact_explanation(ftype: str, ref: str, src_text: str, **parts: str) -> str:
+    if ftype == "rename":
+        return _verse_or_fallback(ref, src_text, f"{parts['name']} is the recorded name in this extracted naming fact.")
+    if ftype == "killed_killer":
+        return _verse_or_fallback(ref, src_text, f"{parts['killer']} is recorded as killing {parts['victim']}.")
+    if ftype == "killed_victim":
+        return _verse_or_fallback(ref, src_text, f"{parts['victim']} is recorded as being killed by {parts['killer']}.")
+    if ftype == "spoke_to":
+        return _verse_or_fallback(ref, src_text, f"{parts['speaker']} spoke to {parts['listener']}.")
+    if ftype == "traveled_destination":
+        return _verse_or_fallback(ref, src_text, f"{parts['traveler']} traveled to {parts['destination']}.")
+    if ftype == "traveled_source":
+        return _verse_or_fallback(ref, src_text, f"{parts['traveler']} traveled from {parts['source']} to {parts['destination']}.")
+    if ftype == "role_name":
+        return _verse_or_fallback(ref, src_text, f"{parts['person']} is recorded with the role {parts['role']}.")
+    if ftype == "role_realm":
+        return _verse_or_fallback(ref, src_text, f"{parts['person']} reigned over {parts['realm']}.")
+    if ftype in {"appeared_to_recipient", "appeared_to_entity"}:
+        return _verse_or_fallback(ref, src_text, f"{parts['entity']} appeared to {parts['recipient']}.")
+    if ftype == "manifestation_form":
+        return _verse_or_fallback(ref, src_text, f"{parts['entity']} manifested in the form of {parts['form']}.")
+    return _verse_or_fallback(ref, src_text, "This question is based on an extracted fact.")
 
 
 # -----------------------------
@@ -160,6 +210,7 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
     victims = set()
     travelers = set()
     appearance_recipients = set()
+    dialogue_people = set()
 
     for f in facts:
         ftype = f.get("type")
@@ -197,12 +248,14 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         elif ftype == "spoke_to":
             speaker = normalize_choice_name(f.get("speaker"))
             listener = normalize_choice_name(f.get("listener"))
-            if is_good_name(speaker):
+            if is_good_dialogue_person(speaker):
                 people.add(speaker)
                 speakers.add(speaker)
-            if is_good_name(listener):
+                dialogue_people.add(speaker)
+            if is_good_dialogue_person(listener):
                 people.add(listener)
                 listeners.add(listener)
+                dialogue_people.add(listener)
 
         elif ftype == "traveled":
             traveler = normalize_choice_name(f.get("traveler"))
@@ -273,12 +326,14 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         elif ftype in {"interacted_with", "indirect_dialogue", "conversation_reach"}:
             person = normalize_choice_name(f.get("person") or f.get("a"))
             other = normalize_choice_name(f.get("other") or f.get("b") or f.get("reachable"))
-            if is_good_name(person):
+            if is_good_dialogue_person(person):
                 people.add(person)
                 speakers.add(person)
-            if is_good_name(other):
+                dialogue_people.add(person)
+            if is_good_dialogue_person(other):
                 people.add(other)
                 listeners.add(other)
+                dialogue_people.add(other)
 
     return {
         "people": sorted(people),
@@ -292,6 +347,7 @@ def build_pools(facts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         "forms": sorted(forms),
         "speakers": sorted(speakers),
         "listeners": sorted(listeners),
+        "dialogue_people": sorted(dialogue_people),
         "killers": sorted(killers),
         "victims": sorted(victims),
         "travelers": sorted(travelers),
@@ -349,11 +405,12 @@ def _append_inferred_question(
     explanation: str,
     category: str,
     difficulty: str = "medium",
+    pool_key: str = "people",
 ) -> None:
     if not is_good_name(correct):
         return
 
-    distractors = _pick_distractors(rng, pools["people"], correct, 3)
+    distractors = _pick_distractors(rng, pools[pool_key] or pools["people"], correct, 3)
     if not distractors:
         return
 
@@ -416,7 +473,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_parent_explanation(parent, child, parent_gender, ref, src_text),
                         ref=ref,
                         category="Bible • Genealogy",
                         difficulty="easy",
@@ -442,7 +499,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("rename", ref, src_text, name=name),
                         ref=ref,
                         category="Bible • Names",
                         difficulty="easy",
@@ -470,7 +527,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("killed_killer", ref, src_text, killer=killer, victim=victim),
                         ref=ref,
                         category="Bible • Events",
                         difficulty="medium",
@@ -491,7 +548,7 @@ def fact_to_questions(
                         prompt=prompt2,
                         choices=choices2,
                         answer_index=answer_index2,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("killed_victim", ref, src_text, killer=killer, victim=victim),
                         ref=ref,
                         category="Bible • Events",
                         difficulty="medium",
@@ -504,7 +561,7 @@ def fact_to_questions(
         speaker = normalize_choice_name(fact.get("speaker"))
         listener = normalize_choice_name(fact.get("listener"))
 
-        if is_good_name(listener) and is_good_name(speaker):
+        if is_good_dialogue_person(listener) and is_good_dialogue_person(speaker):
             prompt = f"Who spoke to {listener}?"
             correct = speaker
             distractors = _pick_distractors(rng, pools["speakers"] or pools["people"], correct, 3)
@@ -519,7 +576,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("spoke_to", ref, src_text, speaker=speaker, listener=listener),
                         ref=ref,
                         category="Bible • Dialogue",
                         difficulty="easy",
@@ -548,7 +605,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("traveled_destination", ref, src_text, traveler=traveler, destination=destination),
                         ref=ref,
                         category="Bible • Travel",
                         difficulty="easy",
@@ -570,7 +627,7 @@ def fact_to_questions(
                         prompt=prompt2,
                         choices=choices2,
                         answer_index=answer_index2,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("traveled_source", ref, src_text, traveler=traveler, source=source, destination=destination),
                         ref=ref,
                         category="Bible • Travel",
                         difficulty="medium",
@@ -599,7 +656,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("role_name", ref, src_text, person=person, role=role_name),
                         ref=ref,
                         category="Bible • Roles",
                         difficulty="easy",
@@ -621,7 +678,7 @@ def fact_to_questions(
                         prompt=prompt2,
                         choices=choices2,
                         answer_index=answer_index2,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("role_realm", ref, src_text, person=person, realm=realm),
                         ref=ref,
                         category="Bible • Kingdoms",
                         difficulty="medium",
@@ -649,7 +706,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("appeared_to_recipient", ref, src_text, entity=entity, recipient=recipient),
                         ref=ref,
                         category="Bible • Theophany",
                         difficulty="medium",
@@ -670,7 +727,7 @@ def fact_to_questions(
                         prompt=prompt2,
                         choices=choices2,
                         answer_index=answer_index2,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("appeared_to_entity", ref, src_text, entity=entity, recipient=recipient),
                         ref=ref,
                         category="Bible • Theophany",
                         difficulty="medium",
@@ -698,7 +755,7 @@ def fact_to_questions(
                         prompt=prompt,
                         choices=choices,
                         answer_index=answer_index,
-                        explanation=f"{ref}: {src_text}".strip(),
+                        explanation=_fact_explanation("manifestation_form", ref, src_text, entity=entity, form=form),
                         ref=ref,
                         category="Bible • Manifestation",
                         difficulty="medium",
@@ -753,7 +810,7 @@ def fact_to_questions(
                 qtype="sibling",
                 prompt=f"Who was a sibling of {person}?",
                 correct=sibling,
-                explanation=f"{sibling} is inferred as a sibling of {person} by the Soufflé genealogy rules.",
+                explanation=f"{person} and {sibling} are inferred as siblings because they share a parent.",
                 category="Bible • Inferred Genealogy",
             )
         return out
@@ -762,16 +819,17 @@ def fact_to_questions(
     if ftype == "interacted_with":
         person = normalize_choice_name(fact.get("person") or fact.get("a"))
         other = normalize_choice_name(fact.get("other") or fact.get("b"))
-        if is_good_name(person) and is_good_name(other):
+        if is_good_dialogue_person(person) and is_good_dialogue_person(other):
             _append_inferred_question(
                 out,
                 rng=rng,
                 pools=pools,
                 fact=fact,
                 qtype="interacted_with",
+                pool_key="dialogue_people",
                 prompt=f"Who interacted with {person}?",
                 correct=other,
-                explanation=f"{other} is inferred as having interacted with {person} by the Soufflé dialogue rules.",
+                explanation=f"{other} is connected to {person} through a dialogue relation.",
                 category="Bible • Inferred Dialogue",
             )
         return out
@@ -779,16 +837,17 @@ def fact_to_questions(
     if ftype == "indirect_dialogue":
         person = normalize_choice_name(fact.get("person") or fact.get("a"))
         other = normalize_choice_name(fact.get("other") or fact.get("b"))
-        if is_good_name(person) and is_good_name(other):
+        if is_good_dialogue_person(person) and is_good_dialogue_person(other):
             _append_inferred_question(
                 out,
                 rng=rng,
                 pools=pools,
                 fact=fact,
                 qtype="indirect_dialogue",
+                pool_key="dialogue_people",
                 prompt=f"Who was indirectly connected in dialogue to {person}?",
                 correct=other,
-                explanation=f"{other} is inferred as indirectly connected in dialogue to {person} by the Soufflé dialogue rules.",
+                explanation=f"{other} is indirectly connected to {person} through the dialogue graph.",
                 category="Bible • Inferred Dialogue",
             )
         return out
@@ -796,16 +855,17 @@ def fact_to_questions(
     if ftype == "conversation_reach":
         person = normalize_choice_name(fact.get("person") or fact.get("a"))
         reachable = normalize_choice_name(fact.get("reachable") or fact.get("other") or fact.get("b"))
-        if is_good_name(person) and is_good_name(reachable):
+        if is_good_dialogue_person(person) and is_good_dialogue_person(reachable):
             _append_inferred_question(
                 out,
                 rng=rng,
                 pools=pools,
                 fact=fact,
                 qtype="conversation_reach",
-                prompt=f"Who could be reached through the conversation graph from {person}?",
+                pool_key="dialogue_people",
+                prompt=f"Who was indirectly connected in dialogue to {person}?",
                 correct=reachable,
-                explanation=f"{reachable} is inferred as reachable from {person} through the Soufflé conversation graph rules.",
+                explanation=f"{reachable} is indirectly connected to {person} through the dialogue graph.",
                 category="Bible • Inferred Dialogue",
             )
         return out

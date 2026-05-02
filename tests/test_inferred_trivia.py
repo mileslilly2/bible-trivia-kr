@@ -32,9 +32,59 @@ def test_inferred_facts_generate_valid_pack_schema():
         assert required_keys <= set(question)
         assert len(question["choices"]) == 4
         assert len(set(question["choices"])) == 4
+        assert 0 <= question["answer_index"] < len(question["choices"])
         assert question["choices"][question["answer_index"]] not in [
             choice for i, choice in enumerate(question["choices"]) if i != question["answer_index"]
         ]
+        assert question["explanation"].strip()
+        assert question["explanation"].strip() != ":"
+
+    inferred_explanations = {q["meta"]["fact"]["type"]: q["explanation"] for q in inferred_questions}
+    assert "inferred as an ancestor" in inferred_explanations["ancestor_of"]
+    assert "inferred as a descendant" in inferred_explanations["descendant_of"]
+    assert "share a parent" in inferred_explanations["sibling"]
+    assert "through a dialogue relation" in inferred_explanations["interacted_with"]
+    assert "through the dialogue graph" in inferred_explanations["indirect_dialogue"]
+
+
+def test_empty_extracted_dialogue_explanation_uses_fallback_sentence():
+    facts = _base_people() + [
+        {"type": "spoke_to", "speaker": "Miriam", "listener": "Aaron", "ref": "", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Joshua", "listener": "Aaron", "ref": "", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Samuel", "listener": "Aaron", "ref": "", "text": "", "norm": ""},
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=3)
+
+    dialogue_questions = [q for q in pack["questions"] if q["meta"].get("fact", {}).get("type") == "spoke_to"]
+    assert dialogue_questions
+    for question in dialogue_questions:
+        assert question["explanation"].strip()
+        assert question["explanation"].strip() != ":"
+        assert " spoke to " in question["explanation"] or ":" in question["explanation"]
+        assert len(question["choices"]) == 4
+        assert len(set(question["choices"])) == 4
+        assert 0 <= question["answer_index"] < len(question["choices"])
+
+
+def test_inferred_dialogue_filters_group_answers_from_choices():
+    facts = _base_people() + [
+        {"type": "interacted_with", "person": "Moses", "other": "Israel", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {"type": "interacted_with", "person": "Moses", "other": "Judah", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {"type": "interacted_with", "person": "Moses", "other": "Pharaoh", "ref": "", "text": "", "norm": "", "source": "souffle"},
+        {"type": "interacted_with", "person": "Aaron", "other": "Joshua", "ref": "", "text": "", "norm": "", "source": "souffle"},
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=11)
+
+    inferred_dialogue = [q for q in pack["questions"] if q["category"] == "Bible • Inferred Dialogue"]
+    assert inferred_dialogue
+    for question in inferred_dialogue:
+        assert "Israel" not in question["choices"]
+        assert "Judah" not in question["choices"]
+        assert len(question["choices"]) == 4
+        assert len(set(question["choices"])) == 4
+        assert 0 <= question["answer_index"] < len(question["choices"])
 
 
 def test_load_souffle_trivia_facts_loads_inferred_relations_with_caps(tmp_path):
