@@ -183,6 +183,12 @@ Export a trivia pack from parsed facts:
 python scripts/export_trivia_pack.py --input out/parsed.jsonl --output out/trivia_pack.json --pack-id bible-web-v1 --title "Bible Trivia Pack (WEB)" --translation WEB
 ```
 
+Audit a generated trivia pack:
+
+```bash
+python scripts/audit_trivia_pack.py --input out/trivia/trivia_pack.json --output out/trivia/trivia_audit.json
+```
+
 Build a SQLite trivia pack database:
 
 ```bash
