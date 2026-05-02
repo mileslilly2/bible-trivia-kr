@@ -3,7 +3,7 @@ import sys
 import os
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any, Dict, Iterator, Optional, Tuple, List
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -297,6 +297,7 @@ SOUFFLE_RELATION_FIELDS: Dict[str, Tuple[str, ...]] = {
     "interacted_with": ("person", "other"),
     "indirect_dialogue": ("person", "other"),
     "conversation_reach": ("person", "reachable"),
+    "fact_ref": ("relation", "arg1", "arg2", "ref"),
     "begat": ("father", "child"),
     "father": ("father", "child"),
     "event": ("eid",),
@@ -402,7 +403,82 @@ def load_souffle_relation(path: str, relation: str) -> List[Dict[str, Any]]:
     return records
 
 
-def _souffle_trivia_fact(rec: Dict[str, Any], relation: str) -> Dict[str, Any]:
+def _unique_refs(refs: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for ref in refs:
+        ref = (ref or "").strip()
+        if ref and ref not in seen:
+            seen.add(ref)
+            out.append(ref)
+    return out
+
+
+def _load_fact_ref_lookup(out_dir: str) -> Dict[Tuple[str, str, str], List[str]]:
+    lookup: Dict[Tuple[str, str, str], List[str]] = defaultdict(list)
+    for rec in load_souffle_relation(os.path.join(out_dir, "fact_ref.csv"), "fact_ref"):
+        relation = rec.get("relation", "")
+        arg1 = rec.get("arg1", "")
+        arg2 = rec.get("arg2", "")
+        ref = rec.get("ref", "")
+        if relation and arg1 and arg2 and ref:
+            lookup[(relation, arg1, arg2)].append(ref)
+    return {key: _unique_refs(refs) for key, refs in lookup.items()}
+
+
+def _refs_for_key(fact_refs: Dict[Tuple[str, str, str], List[str]], relation: str, arg1: str, arg2: str) -> List[str]:
+    return fact_refs.get((relation, arg1 or "", arg2 or ""), [])
+
+
+def _sibling_refs(fact_refs: Dict[Tuple[str, str, str], List[str]], person: str, sibling: str) -> List[str]:
+    refs: List[str] = []
+    parent_children: Dict[str, set] = defaultdict(set)
+    for relation, parent, child in fact_refs:
+        if relation == "parent_of":
+            parent_children[parent].add(child)
+    for parent, children in parent_children.items():
+        if person in children and sibling in children:
+            refs.extend(_refs_for_key(fact_refs, "parent_of", parent, person))
+            refs.extend(_refs_for_key(fact_refs, "parent_of", parent, sibling))
+    return _unique_refs(refs)
+
+
+def _provenance_refs_for_fact(fact_refs: Dict[Tuple[str, str, str], List[str]], relation: str, rec: Dict[str, Any]) -> List[str]:
+    if relation == "ancestor_of":
+        return _refs_for_key(fact_refs, "parent_of", rec.get("ancestor", ""), rec.get("descendant", ""))
+    if relation == "descendant_of":
+        return _refs_for_key(fact_refs, "parent_of", rec.get("ancestor", ""), rec.get("descendant", ""))
+    if relation == "sibling":
+        return _sibling_refs(fact_refs, rec.get("person", ""), rec.get("sibling", ""))
+    if relation in {"interacted_with", "indirect_dialogue"}:
+        person = rec.get("person", "")
+        other = rec.get("other", "")
+        return _unique_refs(
+            _refs_for_key(fact_refs, "spoke_to", person, other)
+            + _refs_for_key(fact_refs, "spoke_to", other, person)
+        )
+    if relation == "conversation_reach":
+        return _refs_for_key(fact_refs, "spoke_to", rec.get("person", ""), rec.get("reachable", ""))
+    if relation in {"father", "begat"}:
+        return _refs_for_key(fact_refs, "parent_of", rec.get("father", ""), rec.get("child", ""))
+    if relation == "said":
+        return _refs_for_key(fact_refs, "spoke_to", rec.get("speaker", ""), rec.get("listener", ""))
+    return []
+
+
+def _apply_provenance(fact: Dict[str, Any], refs: List[str]) -> Dict[str, Any]:
+    refs = _unique_refs(refs)
+    if refs:
+        fact["ref"] = "; ".join(refs[:2])
+        fact["provenance_refs"] = refs
+    return fact
+
+
+def _souffle_trivia_fact(
+    rec: Dict[str, Any],
+    relation: str,
+    fact_refs: Optional[Dict[Tuple[str, str, str], List[str]]] = None,
+) -> Dict[str, Any]:
     fact = dict(rec)
     fact.update({
         "type": relation,
@@ -411,6 +487,8 @@ def _souffle_trivia_fact(rec: Dict[str, Any], relation: str) -> Dict[str, Any]:
         "norm": "",
         "source": "souffle",
     })
+    if fact_refs is not None:
+        _apply_provenance(fact, _provenance_refs_for_fact(fact_refs, relation, rec))
     return fact
 
 
@@ -418,6 +496,7 @@ def load_souffle_trivia_facts(out_dir: str) -> Tuple[List[Dict[str, Any]], Dict[
     facts: List[Dict[str, Any]] = []
     counts: Counter[str] = Counter()
     dialogue_loaded = 0
+    fact_refs = _load_fact_ref_lookup(out_dir)
 
     for relation in SOUFFLE_INFERRED_TRIVIA_RELATIONS:
         csv_path = os.path.join(out_dir, f"{relation}.csv")
@@ -432,7 +511,7 @@ def load_souffle_trivia_facts(out_dir: str) -> Tuple[List[Dict[str, Any]], Dict[
         selected = rows[:cap] if cap is not None else rows
 
         for rec in selected:
-            facts.append(_souffle_trivia_fact(rec, relation))
+            facts.append(_souffle_trivia_fact(rec, relation, fact_refs))
             counts[relation] += 1
 
         if relation in {"interacted_with", "indirect_dialogue", "conversation_reach"}:
@@ -447,7 +526,7 @@ def load_souffle_trivia_facts(out_dir: str) -> Tuple[List[Dict[str, Any]], Dict[
                 father = rec.get("father")
                 child = rec.get("child")
                 if father and child:
-                    facts.append({
+                    fact = {
                         "type": "parent_of",
                         "parent": father,
                         "child": child,
@@ -456,13 +535,14 @@ def load_souffle_trivia_facts(out_dir: str) -> Tuple[List[Dict[str, Any]], Dict[
                         "text": "",
                         "norm": "",
                         "source": "souffle",
-                    })
+                    }
+                    facts.append(_apply_provenance(fact, _provenance_refs_for_fact(fact_refs, relation, rec)))
                     counts[relation] += 1
             elif relation == "said":
                 speaker = rec.get("speaker")
                 listener = rec.get("listener")
                 if speaker and listener:
-                    facts.append({
+                    fact = {
                         "type": "spoke_to",
                         "speaker": speaker,
                         "listener": listener,
@@ -470,7 +550,8 @@ def load_souffle_trivia_facts(out_dir: str) -> Tuple[List[Dict[str, Any]], Dict[
                         "text": "",
                         "norm": "",
                         "source": "souffle",
-                    })
+                    }
+                    facts.append(_apply_provenance(fact, _provenance_refs_for_fact(fact_refs, relation, rec)))
                     counts[relation] += 1
 
     return facts, dict(counts)

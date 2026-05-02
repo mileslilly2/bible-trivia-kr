@@ -120,6 +120,13 @@ def _parent_explanation(parent: str, child: str, parent_gender: Optional[str], r
     return _verse_or_fallback(ref, src_text, f"{parent} is recorded as the {relation} of {child}.")
 
 
+def _inferred_explanation(base: str, fact: Dict[str, Any]) -> str:
+    refs = fact.get("provenance_refs") or []
+    if refs:
+        return f"{base} from source facts including {refs[0]}."
+    return base + "."
+
+
 def _fact_explanation(ftype: str, ref: str, src_text: str, **parts: str) -> str:
     if ftype == "rename":
         return _verse_or_fallback(ref, src_text, f"{parts['name']} is the recorded name in this extracted naming fact.")
@@ -419,6 +426,12 @@ def _append_inferred_question(
     if not choices_look_clean(choices):
         return
 
+    meta = {"fact": fact, "norm": fact.get("norm", "")}
+    provenance_refs = fact.get("provenance_refs")
+    if provenance_refs:
+        meta["provenance_refs"] = provenance_refs
+        meta["inferred"] = True
+
     out.append(MCQuestion(
         id=_stable_id(qtype, correct, prompt),
         prompt=prompt,
@@ -428,7 +441,7 @@ def _append_inferred_question(
         ref=fact.get("ref", ""),
         category=category,
         difficulty=difficulty,
-        meta={"fact": fact, "norm": fact.get("norm", "")},
+        meta=meta,
     ))
 
 def fact_to_questions(
@@ -776,7 +789,7 @@ def fact_to_questions(
                 qtype="ancestor_of",
                 prompt=f"Who was an ancestor of {descendant}?",
                 correct=ancestor,
-                explanation=f"{ancestor} is inferred as an ancestor of {descendant} by the Soufflé genealogy rules.",
+                explanation=_inferred_explanation(f"{ancestor} is inferred as an ancestor of {descendant} by the Soufflé genealogy rules", fact),
                 category="Bible • Inferred Genealogy",
             )
         return out
@@ -793,7 +806,7 @@ def fact_to_questions(
                 qtype="descendant_of",
                 prompt=f"Who was a descendant of {ancestor}?",
                 correct=descendant,
-                explanation=f"{descendant} is inferred as a descendant of {ancestor} by the Soufflé genealogy rules.",
+                explanation=_inferred_explanation(f"{descendant} is inferred as a descendant of {ancestor} by the Soufflé genealogy rules", fact),
                 category="Bible • Inferred Genealogy",
             )
         return out
@@ -810,7 +823,7 @@ def fact_to_questions(
                 qtype="sibling",
                 prompt=f"Who was a sibling of {person}?",
                 correct=sibling,
-                explanation=f"{person} and {sibling} are inferred as siblings because they share a parent.",
+                explanation=_inferred_explanation(f"{person} and {sibling} are inferred as siblings because they share a parent", fact),
                 category="Bible • Inferred Genealogy",
             )
         return out
@@ -829,7 +842,7 @@ def fact_to_questions(
                 pool_key="dialogue_people",
                 prompt=f"Who interacted with {person}?",
                 correct=other,
-                explanation=f"{other} is connected to {person} through a dialogue relation.",
+                explanation=_inferred_explanation(f"{other} is connected to {person} through a dialogue relation", fact),
                 category="Bible • Inferred Dialogue",
             )
         return out
@@ -847,7 +860,7 @@ def fact_to_questions(
                 pool_key="dialogue_people",
                 prompt=f"Who was indirectly connected in dialogue to {person}?",
                 correct=other,
-                explanation=f"{other} is indirectly connected to {person} through the dialogue graph.",
+                explanation=_inferred_explanation(f"{other} is indirectly connected to {person} through the dialogue graph", fact),
                 category="Bible • Inferred Dialogue",
             )
         return out
@@ -865,7 +878,7 @@ def fact_to_questions(
                 pool_key="dialogue_people",
                 prompt=f"Who was indirectly connected in dialogue to {person}?",
                 correct=reachable,
-                explanation=f"{reachable} is indirectly connected to {person} through the dialogue graph.",
+                explanation=_inferred_explanation(f"{reachable} is indirectly connected to {person} through the dialogue graph", fact),
                 category="Bible • Inferred Dialogue",
             )
         return out

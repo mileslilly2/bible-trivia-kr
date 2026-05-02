@@ -87,6 +87,65 @@ def test_inferred_dialogue_filters_group_answers_from_choices():
         assert 0 <= question["answer_index"] < len(question["choices"])
 
 
+def test_load_souffle_trivia_facts_attaches_safe_fact_ref_provenance(tmp_path):
+    (tmp_path / "ancestor_of.csv").write_text("Abraham\tIsaac\nAbraham\tJacob\n", encoding="utf-8")
+    (tmp_path / "descendant_of.csv").write_text("Isaac\tAbraham\n", encoding="utf-8")
+    (tmp_path / "interacted_with.csv").write_text("Moses\tAaron\n", encoding="utf-8")
+    (tmp_path / "indirect_dialogue.csv").write_text("Moses\tPharaoh\n", encoding="utf-8")
+    (tmp_path / "conversation_reach.csv").write_text("Moses\tJoshua\n", encoding="utf-8")
+    (tmp_path / "sibling.csv").write_text("Isaac\tIshmael\n", encoding="utf-8")
+    (tmp_path / "fact_ref.csv").write_text(
+        "parent_of\tAbraham\tIsaac\tGenesis 21:3\n"
+        "parent_of\tAbraham\tIshmael\tGenesis 16:15\n"
+        "spoke_to\tMoses\tAaron\tExodus 4:28\n"
+        "spoke_to\tMoses\tJoshua\tDeuteronomy 31:7\n",
+        encoding="utf-8",
+    )
+
+    facts, _ = load_souffle_trivia_facts(str(tmp_path))
+    ancestor_direct = next(f for f in facts if f["type"] == "ancestor_of" and f["descendant"] == "Isaac")
+    ancestor_indirect = next(f for f in facts if f["type"] == "ancestor_of" and f["descendant"] == "Jacob")
+    descendant_direct = next(f for f in facts if f["type"] == "descendant_of")
+    interacted = next(f for f in facts if f["type"] == "interacted_with")
+    indirect = next(f for f in facts if f["type"] == "indirect_dialogue")
+    reach = next(f for f in facts if f["type"] == "conversation_reach")
+    sibling = next(f for f in facts if f["type"] == "sibling")
+
+    assert ancestor_direct["ref"] == "Genesis 21:3"
+    assert ancestor_direct["provenance_refs"] == ["Genesis 21:3"]
+    assert ancestor_indirect["ref"] == ""
+    assert "provenance_refs" not in ancestor_indirect
+    assert descendant_direct["ref"] == "Genesis 21:3"
+    assert interacted["ref"] == "Exodus 4:28"
+    assert indirect["ref"] == ""
+    assert reach["ref"] == "Deuteronomy 31:7"
+    assert sibling["ref"] == "Genesis 21:3; Genesis 16:15"
+    assert sibling["provenance_refs"] == ["Genesis 21:3", "Genesis 16:15"]
+
+
+def test_inferred_question_meta_includes_provenance_refs_when_available():
+    facts = _base_people() + [
+        {
+            "type": "ancestor_of",
+            "ancestor": "Abraham",
+            "descendant": "Isaac",
+            "ref": "Genesis 21:3",
+            "text": "",
+            "norm": "",
+            "source": "souffle",
+            "provenance_refs": ["Genesis 21:3"],
+        }
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=5)
+    question = next(q for q in pack["questions"] if q["meta"].get("fact", {}).get("type") == "ancestor_of")
+
+    assert question["ref"] == "Genesis 21:3"
+    assert question["meta"]["provenance_refs"] == ["Genesis 21:3"]
+    assert question["meta"]["inferred"] is True
+    assert "Genesis 21:3" in question["explanation"]
+
+
 def test_load_souffle_trivia_facts_loads_inferred_relations_with_caps(tmp_path):
     (tmp_path / "ancestor_of.csv").write_text("".join(f"Ancestor{i}\tDescendant{i}\n" for i in range(305)), encoding="utf-8")
     (tmp_path / "descendant_of.csv").write_text("Jacob\tAbraham\n", encoding="utf-8")
