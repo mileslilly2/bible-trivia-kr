@@ -1,0 +1,26 @@
+event(Message) :-
+    said(_, _, Message).
+
+event_type(Message, "speech") :-
+    said(_, _, Message).
+
+agent(Message, Speaker) :-
+    said(Speaker, _, Message).
+
+recipient(Message, Listener) :-
+    said(_, Listener, Message).
+
+event_type(Message, "direct_speech") :-
+    agent(Message, _),
+    recipient(Message, _).
+
+interacted_with(PersonA, PersonB) :-
+    spoke_to(PersonA, PersonB).
+
+interacted_with(PersonA, PersonB) :-
+    spoke_to(PersonB, PersonA).
+
+indirect_dialogue(PersonA, PersonC) :-
+    spoke_to(PersonA, PersonB),
+    spoke_to(PersonB, PersonC),
+    PersonA != PersonC.

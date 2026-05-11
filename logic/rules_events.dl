@@ -1,0 +1,32 @@
+begat(Father, Child) :-
+    parent_of(Father, Child).
+
+said(Speaker, Listener, "") :-
+    spoke_to(Speaker, Listener).
+
+event(Eid) :-
+    event_type(Eid, _).
+
+event(Eid) :-
+    agent(Eid, _).
+
+event(Eid) :-
+    recipient(Eid, _).
+
+event_type(Eid, "interaction") :-
+    agent(Eid, _),
+    recipient(Eid, _).
+
+event_type(Eid, "agentive_event") :-
+    event(Eid),
+    agent(Eid, _).
+
+event_type(Eid, "received_event") :-
+    event(Eid),
+    recipient(Eid, _).
+
+participant(Person, EventId) :-
+    agent(EventId, Person).
+
+participant(Person, EventId) :-
+    recipient(EventId, Person).

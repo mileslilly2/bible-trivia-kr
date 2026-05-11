@@ -1,0 +1,23 @@
+event_type(Eid, "theophany") :-
+    event_type(Eid, "appearance"),
+    agent(Eid, "God").
+
+event_type(Eid, "theophany") :-
+    event_type(Eid, "appearance"),
+    agent(Eid, "Yahweh").
+
+event_type(Eid, "theophany") :-
+    event_type(Eid, "appearance"),
+    agent(Eid, "LORD").
+
+event_type(Eid, "divine_speech") :-
+    event_type(Eid, "speech"),
+    agent(Eid, "God").
+
+event_type(Eid, "divine_speech") :-
+    event_type(Eid, "speech"),
+    agent(Eid, "Yahweh").
+
+event_type(Eid, "divine_speech") :-
+    event_type(Eid, "speech"),
+    agent(Eid, "LORD").

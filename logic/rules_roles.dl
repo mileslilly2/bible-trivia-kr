@@ -1,0 +1,17 @@
+event_type(Eid, "royal_action") :-
+    event_type(Eid, "reign").
+
+event_type(Eid, "royal_action") :-
+    event_type(Eid, "anoint").
+
+event_type(Eid, "priestly_action") :-
+    event_type(Eid, "sacrifice").
+
+event_type(Eid, "priestly_action") :-
+    event_type(Eid, "bless").
+
+event_type(Eid, "office_action") :-
+    event_type(Eid, "royal_action").
+
+event_type(Eid, "office_action") :-
+    event_type(Eid, "priestly_action").

@@ -1,0 +1,22 @@
+event_type(Eid, "travel") :-
+    event_type(Eid, "went").
+
+event_type(Eid, "travel") :-
+    event_type(Eid, "journeyed").
+
+event_type(Eid, "travel") :-
+    event_type(Eid, "traveled").
+
+event_type(Eid, "travel") :-
+    event_type(Eid, "came").
+
+event_type(Eid, "visitation") :-
+    event_type(Eid, "visit").
+
+event_type(Eid, "visitation") :-
+    event_type(Eid, "travel"),
+    recipient(Eid, _).
+
+travel_path(Start, Destination) :-
+    traveled_to(Start, Waypoint),
+    traveled_to(Waypoint, Destination).

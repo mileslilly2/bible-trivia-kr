@@ -1,0 +1,13 @@
+
+#include "schema.dl"
+.include "facts.dl"
+
+#include "rules_family.dl"
+#include "rules_events.dl"
+#include "rules_dialogue.dl"
+#include "rules_roles.dl"
+#include "rules_theophany.dl"
+#include "rules_travel.dl"
+#include "rules_locations.dl"
+#include "rules_prophets.dl"
+#include "rules_kings.dl"

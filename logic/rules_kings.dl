@@ -1,0 +1,17 @@
+event_type(Eid, "royal_rule") :-
+    event_type(Eid, "reign").
+
+event_type(Eid, "royal_rule") :-
+    event_type(Eid, "sat_on_throne").
+
+event_type(Eid, "royal_succession") :-
+    event_type(Eid, "anoint").
+
+event_type(Eid, "royal_succession") :-
+    event_type(Eid, "crown").
+
+event_type(Eid, "royal_action") :-
+    event_type(Eid, "royal_rule").
+
+event_type(Eid, "royal_action") :-
+    event_type(Eid, "royal_succession").
