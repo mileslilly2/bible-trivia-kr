@@ -36,6 +36,28 @@ BAD_SINGLE_TOKENS = {
     "Ethiopian", "Bethlehemite", "Hushathite", "Moabite", "Moabitess",
 }
 
+SUSPICIOUS_ENTITY_NAMES = {
+    "ammonite",
+    "ammonites",
+    "edomite",
+    "edomites",
+    "egyptian",
+    "egyptians",
+    "gentile",
+    "gentiles",
+    "hebrew",
+    "hebrews",
+    "israelite",
+    "israelites",
+    "judean",
+    "judeans",
+    "moabite",
+    "moabites",
+    "moabitess",
+    "philistine",
+    "philistines",
+}
+
 DIALOGUE_GROUP_NAMES = {
     "Israel", "Judah",
 }
@@ -48,6 +70,7 @@ DIVINE_CANON = {
     "God": "God",
     "LORD": "God",
     "Lord": "God",
+    "In Gibeon Yahweh": "God",
     "angel of the LORD": "angel of God",
     "angel of Yahweh": "angel of God",
     "angel of God": "angel of God",
@@ -87,6 +110,8 @@ def is_good_name(s: Optional[str]) -> bool:
     if not s:
         return False
     if s in _BAD_NAMES:
+        return False
+    if s.casefold() in SUSPICIOUS_ENTITY_NAMES:
         return False
     if len(s) < 2:
         return False
@@ -202,6 +227,229 @@ def _fact_explanation(ftype: str, ref: str, src_text: str, **parts: str) -> str:
     if ftype == "manifestation_form":
         return _verse_or_fallback(ref, src_text, f"{parts['entity']} manifested in the form of {parts['form']}.")
     return _verse_or_fallback(ref, src_text, "This question is based on an extracted fact.")
+
+
+def _choose_template(rng: random.Random, templates: List[str], **parts: str) -> str:
+    return rng.choice(templates).format(**parts)
+
+
+def _direct_genealogy_prompt(ref: str, relation: str, child: str) -> str:
+    if ref:
+        return f"According to the genealogy in {ref}, who was the {relation} of {child}?"
+    return f"According to the biblical genealogy, who was the {relation} of {child}?"
+
+
+def _rename_prompt(ref: str) -> str:
+    if ref:
+        return f"In {ref}, what name was given?"
+    return "According to the naming record, what name was given?"
+
+
+def _short_quote(text: str, max_words: int = 10) -> Optional[str]:
+    text = normalize(text).strip(" \"'")
+    if not text:
+        return None
+    words = text.split()
+    if not words:
+        return None
+    clipped = " ".join(words[:max_words]).strip(" ,;:")
+    if not clipped:
+        return None
+    if len(words) > max_words:
+        clipped = clipped.rstrip(".!?") + "..."
+    return clipped
+
+
+def _quoted_speech_snippet(src_text: str, speaker: str, listener: str) -> Optional[str]:
+    text = normalize(src_text)
+    if not text or '"' not in text:
+        return None
+
+    escaped_speaker = re.escape(speaker)
+    escaped_listener = re.escape(listener)
+    speech_cues = [
+        rf"\b{escaped_speaker}\s+(?:said|spoke)\s+to\s+{escaped_listener}\b",
+        rf"\b{escaped_speaker}\s+(?:said|spoke)\s+to\s+(?:him|her|them)\b",
+        rf"\b(?:said|spoke)\s+to\s+{escaped_listener}\b",
+        rf"\b(?:said|spoke)\s+to\s+(?:him|her|them)\b",
+        rf"\b{escaped_speaker}\s+(?:said|spoke)\b",
+    ]
+
+    start_at = -1
+    for cue in speech_cues:
+        match = re.search(cue, text, flags=re.IGNORECASE)
+        if match:
+            start_at = match.end()
+            break
+    if start_at < 0:
+        return None
+
+    quote_match = re.search(r'"([^"]+)"', text[start_at:])
+    if not quote_match:
+        return None
+    return _short_quote(quote_match.group(1))
+
+
+def _dialogue_prompt(rng: random.Random, ref: str, speaker: str, listener: str, src_text: str) -> str:
+    quote = _quoted_speech_snippet(src_text, speaker, listener)
+    if quote and ref:
+        return f"In {ref}, who said to {listener}, '{quote}'?"
+    if quote:
+        return f"According to the recorded speech, who said to {listener}, '{quote}'?"
+    if ref:
+        return _choose_template(
+            rng,
+            [
+                "In {ref}, who spoke with {listener}?",
+                "According to {ref}, who addressed {listener}?",
+                "Who spoke to {listener} in {ref}?",
+            ],
+            ref=ref,
+            listener=listener,
+        )
+    return _choose_template(
+        rng,
+        [
+            "According to recorded speech events, who spoke with {listener}?",
+            "In the recorded dialogue, who addressed {listener}?",
+        ],
+        listener=listener,
+    )
+
+
+def _travel_destination_prompt(rng: random.Random, ref: str, traveler: str) -> str:
+    if ref:
+        return _choose_template(
+            rng,
+            [
+                "In {ref}, where did {traveler} travel?",
+                "According to {ref}, where did {traveler} go?",
+                "Where did {traveler} travel in {ref}?",
+            ],
+            ref=ref,
+            traveler=traveler,
+        )
+    return f"According to the travel record, where did {traveler} travel?"
+
+
+def _travel_source_prompt(rng: random.Random, ref: str, traveler: str, destination: str) -> str:
+    if ref:
+        return _choose_template(
+            rng,
+            [
+                "In {ref}, from where did {traveler} travel to {destination}?",
+                "According to {ref}, where did {traveler}'s journey to {destination} begin?",
+            ],
+            ref=ref,
+            traveler=traveler,
+            destination=destination,
+        )
+    return f"According to the travel record, from where did {traveler} travel to {destination}?"
+
+
+def _appearance_recipient_prompt(rng: random.Random, ref: str, entity: str) -> str:
+    if ref:
+        return _choose_template(
+            rng,
+            [
+                "To whom did {entity} appear in {ref}?",
+                "In {ref}, to whom did {entity} appear?",
+            ],
+            ref=ref,
+            entity=entity,
+        )
+    return f"According to the appearance account, to whom did {entity} appear?"
+
+
+def _appearance_entity_prompt(rng: random.Random, ref: str, recipient: str) -> str:
+    if ref:
+        return _choose_template(
+            rng,
+            [
+                "Who appeared to {recipient} in {ref}?",
+                "In {ref}, who appeared to {recipient}?",
+            ],
+            ref=ref,
+            recipient=recipient,
+        )
+    return f"According to the appearance account, who appeared to {recipient}?"
+
+
+def _manifestation_prompt(ref: str, entity: str) -> str:
+    if ref:
+        return f"In {ref}, in what form did {entity} appear?"
+    return f"According to the manifestation account, in what form did {entity} appear?"
+
+
+def _genealogy_anchor(fact: Dict[str, Any]) -> Optional[str]:
+    chain = fact.get("genealogy_chain") or []
+    if len(chain) >= 2 and chain[0]:
+        return normalize_choice_name(chain[0])
+    return None
+
+
+def _ancestor_prompt(rng: random.Random, fact: Dict[str, Any], descendant: str) -> str:
+    anchor = _genealogy_anchor(fact)
+    if anchor and anchor != descendant:
+        return _choose_template(
+            rng,
+            [
+                "Through the genealogy of {anchor}, who was an ancestor of {descendant}?",
+                "According to the genealogy running from {anchor}, who was an ancestor of {descendant}?",
+            ],
+            anchor=anchor,
+            descendant=descendant,
+        )
+    return _choose_template(
+        rng,
+        [
+            "According to biblical genealogies, who was an ancestor of {descendant}?",
+            "In the biblical genealogies, who was counted among the ancestors of {descendant}?",
+        ],
+        descendant=descendant,
+    )
+
+
+def _descendant_prompt(rng: random.Random, fact: Dict[str, Any], ancestor: str) -> str:
+    anchor = _genealogy_anchor(fact)
+    if anchor:
+        return _choose_template(
+            rng,
+            [
+                "Through the genealogy of {anchor}, who was a descendant of {ancestor}?",
+                "According to the genealogy running from {anchor}, who descended from {ancestor}?",
+            ],
+            anchor=anchor,
+            ancestor=ancestor,
+        )
+    return _choose_template(
+        rng,
+        [
+            "According to biblical genealogies, who was a descendant of {ancestor}?",
+            "In the biblical genealogies, who was counted among the descendants of {ancestor}?",
+        ],
+        ancestor=ancestor,
+    )
+
+
+def _sibling_prompt(person: str) -> str:
+    return f"According to biblical genealogies, who was a sibling of {person}?"
+
+
+def _inferred_dialogue_prompt(rng: random.Random, fact: Dict[str, Any], person: str) -> str:
+    ref = fact.get("ref", "")
+    if ref:
+        return _choose_template(
+            rng,
+            [
+                "In the cited passage {ref}, who is recorded as speaking with {person}?",
+                "According to {ref}, who is linked with {person} through recorded speech?",
+                "Who is connected with {person} through recorded speech in {ref}?",
+            ],
+            ref=ref,
+            person=person,
+        )
+    return f"According to recorded speech events, who is connected with {person}?"
 
 
 # -----------------------------
@@ -541,13 +789,13 @@ def fact_to_questions(
 
         if is_good_name(child) and is_good_name(parent):
             if parent_gender == "female":
-                prompt = f"Who was the mother of {child}?"
+                prompt = _direct_genealogy_prompt(ref, "mother", child)
                 distractor_pool = pools["parent_female"] or pools["people"]
             elif parent_gender == "male":
-                prompt = f"Who was the father of {child}?"
+                prompt = _direct_genealogy_prompt(ref, "father", child)
                 distractor_pool = pools["parent_male"] or pools["people"]
             else:
-                prompt = f"Who was the parent of {child}?"
+                prompt = _direct_genealogy_prompt(ref, "parent", child)
                 distractor_pool = pools["people"]
 
             correct = parent
@@ -575,7 +823,7 @@ def fact_to_questions(
     if ftype == "rename":
         name = normalize_choice_name(fact.get("name"))
         if is_good_name(name):
-            prompt = f"In {ref}, what name is given?"
+            prompt = _rename_prompt(ref)
             correct = name
             distractors = _pick_distractors(rng, pools["names"], correct, 3)
             if distractors:
@@ -652,7 +900,7 @@ def fact_to_questions(
         listener = normalize_dialogue_name(fact.get("listener"))
 
         if is_good_dialogue_person(listener) and is_good_dialogue_person(speaker):
-            prompt = f"Who spoke to {listener}?"
+            prompt = _dialogue_prompt(rng, ref, speaker, listener, src_text)
             correct = speaker
             distractors = _pick_distractors(rng, pools["speakers"] or pools["people"], correct, 3)
             if distractors:
@@ -681,7 +929,7 @@ def fact_to_questions(
         destination = normalize_choice_name(fact.get("destination"))
 
         if is_good_name(traveler) and is_good_name(destination):
-            prompt = f"Where did {traveler} travel to?"
+            prompt = _travel_destination_prompt(rng, ref, traveler)
             correct = destination
             distractors = _pick_distractors(rng, pools["destinations"], correct, 3)
             if distractors:
@@ -703,7 +951,7 @@ def fact_to_questions(
                     ))
 
         if is_good_name(traveler) and is_good_name(source) and is_good_name(destination):
-            prompt2 = f"From where did {traveler} travel to {destination}?"
+            prompt2 = _travel_source_prompt(rng, ref, traveler, destination)
             correct2 = source
             distractors2 = _pick_distractors(rng, pools["destinations"], correct2, 3)
             if distractors2:
@@ -782,7 +1030,7 @@ def fact_to_questions(
         recipient = normalize_choice_name(fact.get("recipient"))
 
         if is_good_name(entity) and is_good_name(recipient):
-            prompt = f"To whom did {entity} appear?"
+            prompt = _appearance_recipient_prompt(rng, ref, entity)
             correct = recipient
             distractors = _pick_distractors(rng, pools["appearance_recipients"] or pools["people"], correct, 3)
             if distractors:
@@ -803,7 +1051,7 @@ def fact_to_questions(
                         meta={"fact": fact, "norm": norm_text},
                     ))
 
-            prompt2 = f"Who appeared to {recipient}?"
+            prompt2 = _appearance_entity_prompt(rng, ref, recipient)
             correct2 = entity
             distractors2 = _pick_distractors(rng, pools["entities"] or pools["people"], correct2, 3)
             if distractors2:
@@ -831,7 +1079,7 @@ def fact_to_questions(
         form = normalize_form(fact.get("form"))
 
         if is_good_name(entity) and form:
-            prompt = f"In what form did {entity} manifest in {ref}?"
+            prompt = _manifestation_prompt(ref, entity)
             correct = form
             distractors = _pick_distractors(rng, pools["forms"], correct, 3)
             if distractors:
@@ -864,7 +1112,7 @@ def fact_to_questions(
                 pools=pools,
                 fact=fact,
                 qtype="ancestor_of",
-                prompt=f"Who was an ancestor of {descendant}?",
+                prompt=_ancestor_prompt(rng, fact, descendant),
                 correct=ancestor,
                 explanation=_genealogy_explanation("ancestor_of", ancestor, descendant, fact),
                 category="Bible • Inferred Genealogy",
@@ -881,7 +1129,7 @@ def fact_to_questions(
                 pools=pools,
                 fact=fact,
                 qtype="descendant_of",
-                prompt=f"Who was a descendant of {ancestor}?",
+                prompt=_descendant_prompt(rng, fact, ancestor),
                 correct=descendant,
                 explanation=_genealogy_explanation("descendant_of", descendant, ancestor, fact),
                 category="Bible • Inferred Genealogy",
@@ -898,7 +1146,7 @@ def fact_to_questions(
                 pools=pools,
                 fact=fact,
                 qtype="sibling",
-                prompt=f"Who was a sibling of {person}?",
+                prompt=_sibling_prompt(person),
                 correct=sibling,
                 explanation=_sibling_explanation(person, sibling, fact),
                 category="Bible • Inferred Genealogy",
@@ -917,7 +1165,7 @@ def fact_to_questions(
                 fact=fact,
                 qtype="interacted_with",
                 pool_key="dialogue_people",
-                prompt=f"Who is recorded as speaking with {person} in the cited passage?",
+                prompt=_inferred_dialogue_prompt(rng, fact, person),
                 correct=other,
                 explanation=_inferred_explanation(f"{other} and {person} are linked through a chain of recorded speech interactions in the cited passages", fact),
                 category="Bible • Inferred Dialogue",

@@ -7,6 +7,8 @@ def _base_people():
         {"type": "parent_of", "parent": "Noah", "child": "Shem", "ref": "Genesis 5:32", "text": "", "norm": ""},
         {"type": "spoke_to", "speaker": "Moses", "listener": "Aaron", "ref": "Exodus 4:28", "text": "", "norm": ""},
         {"type": "killed", "killer": "Cain", "victim": "Abel", "ref": "Genesis 4:8", "text": "", "norm": ""},
+        {"type": "parent_of", "parent": "Abraham", "child": "Isaac", "ref": "Genesis 21:3"},
+        {"type": "parent_of", "parent": "Isaac", "child": "Jacob", "ref": "Genesis 25:26"},
     ]
 
 def test_genealogy_depth_filtering():

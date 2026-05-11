@@ -8,6 +8,10 @@ def _base_people():
         {"type": "parent_of", "parent": "Noah", "child": "Shem", "ref": "Genesis 5:32", "text": "", "norm": ""},
         {"type": "spoke_to", "speaker": "Moses", "listener": "Aaron", "ref": "Exodus 4:28", "text": "", "norm": ""},
         {"type": "killed", "killer": "Cain", "victim": "Abel", "ref": "Genesis 4:8", "text": "", "norm": ""},
+        {"type": "parent_of", "parent": "Abraham", "child": "Isaac", "ref": "Genesis 21:3", "text": "", "norm": ""},
+        {"type": "parent_of", "parent": "Isaac", "child": "Jacob", "ref": "Genesis 25:26", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Moses", "listener": "Pharaoh", "ref": "Exodus 5:1", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Moses", "listener": "Joshua", "ref": "Exodus 17:9", "text": "", "norm": ""},
     ]
 
 
@@ -170,6 +174,86 @@ def test_dialogue_filters_demonyms_and_normalizes_divine_names():
         assert len(question["choices"]) == 4
         assert len(set(question["choices"])) == 4
         assert 0 <= question["answer_index"] < len(question["choices"])
+
+
+def test_extracted_dialogue_prefers_short_source_quote_when_available():
+    facts = [
+        {"type": "parent_of", "parent": "Adam", "child": "Seth", "ref": "Genesis 5:3", "text": "", "norm": ""},
+        {"type": "parent_of", "parent": "Noah", "child": "Shem", "ref": "Genesis 5:32", "text": "", "norm": ""},
+        {
+            "type": "spoke_to",
+            "speaker": "David",
+            "listener": "Jonathan",
+            "ref": "1 Samuel 20:4",
+            "text": 'David said to Jonathan, "Whatever your soul desires, I will even do it for you."',
+            "norm": "",
+        },
+        {"type": "spoke_to", "speaker": "Moses", "listener": "Aaron", "ref": "Exodus 4:28", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Samuel", "listener": "Saul", "ref": "1 Samuel 15:1", "text": "", "norm": ""},
+        {"type": "spoke_to", "speaker": "Nathan", "listener": "David", "ref": "2 Samuel 12:7", "text": "", "norm": ""},
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=23)
+    question = next(q for q in pack["questions"] if q["ref"] == "1 Samuel 20:4")
+
+    assert question["question"] == "In 1 Samuel 20:4, who said to Jonathan, 'Whatever your soul desires, I will even do it for...'?"
+    assert question["choices"][question["answer_index"]] == "David"
+
+
+def test_extracted_questions_use_contextual_ref_aware_templates():
+    facts = _base_people() + [
+        {"type": "rename", "name": "Seth", "ref": "Genesis 4:25", "text": "", "norm": ""},
+        {"type": "rename", "name": "Noah", "ref": "Genesis 5:29", "text": "", "norm": ""},
+        {"type": "rename", "name": "Isaac", "ref": "Genesis 21:3", "text": "", "norm": ""},
+        {"type": "rename", "name": "Israel", "ref": "Genesis 35:10", "text": "", "norm": ""},
+        {"type": "traveled", "traveler": "Abraham", "source": "Haran", "destination": "Canaan", "ref": "Genesis 12:5", "text": "", "norm": ""},
+        {"type": "traveled", "traveler": "Jacob", "source": "Beersheba", "destination": "Haran", "ref": "Genesis 28:10", "text": "", "norm": ""},
+        {"type": "traveled", "traveler": "Moses", "source": "Midian", "destination": "Egypt", "ref": "Exodus 4:20", "text": "", "norm": ""},
+        {"type": "traveled", "traveler": "Jonah", "source": "Joppa", "destination": "Nineveh", "ref": "Jonah 3:3", "text": "", "norm": ""},
+        {"type": "appeared_to", "entity": "God", "recipient": "Abram", "ref": "Genesis 17:1", "text": "", "norm": ""},
+        {"type": "appeared_to", "entity": "angel of God", "recipient": "Moses", "ref": "Exodus 3:2", "text": "", "norm": ""},
+        {"type": "appeared_to", "entity": "Jesus", "recipient": "Paul", "ref": "Acts 26:16", "text": "", "norm": ""},
+        {"type": "appeared_to", "entity": "angel of God", "recipient": "Joseph", "ref": "Matthew 1:20", "text": "", "norm": ""},
+        {"type": "manifestation", "entity": "God", "form": "burning bush", "ref": "Exodus 3:2", "text": "", "norm": ""},
+        {"type": "manifestation", "entity": "God", "form": "pillar of fire", "ref": "Exodus 13:21", "text": "", "norm": ""},
+        {"type": "manifestation", "entity": "God", "form": "pillar of cloud", "ref": "Exodus 13:21", "text": "", "norm": ""},
+        {"type": "manifestation", "entity": "God", "form": "whirlwind", "ref": "Job 38:1", "text": "", "norm": ""},
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=29)
+    by_type = {q["meta"]["fact"]["type"]: [] for q in pack["questions"]}
+    for question in pack["questions"]:
+        by_type.setdefault(question["meta"]["fact"]["type"], []).append(question["question"])
+
+    assert any(q.startswith("According to the genealogy in Genesis") for q in by_type["parent_of"])
+    assert "In Genesis 4:25, what name was given?" in by_type["rename"]
+    assert any("Genesis 12:5" in q and "travel" in q.lower() for q in by_type["traveled"])
+    assert any("Genesis 17:1" in q and "appear" in q.lower() for q in by_type["appeared_to"])
+    assert "In Exodus 3:2, in what form did God appear?" in by_type["manifestation"]
+
+
+def test_inferred_genealogy_uses_biblical_genealogy_framing_without_refs():
+    facts = _base_people() + [
+        {
+            "type": "ancestor_of",
+            "ancestor": "Abraham",
+            "descendant": "Jacob",
+            "ref": "",
+            "text": "",
+            "norm": "",
+            "source": "souffle",
+            "genealogy_chain": ["Abraham", "Isaac", "Jacob"],
+            "genealogy_depth": 2,
+        }
+    ]
+
+    pack = facts_to_trivia_pack(facts, "test-pack", "Test Pack", "WEB", seed=31)
+    question = next(q for q in pack["questions"] if q["meta"]["fact"]["type"] == "ancestor_of")
+
+    assert "genealogy" in question["question"].lower()
+    assert "Jacob" in question["question"]
+    assert question["ref"] == ""
+    assert question["choices"][question["answer_index"]] == "Abraham"
 
 
 def test_load_souffle_trivia_facts_attaches_safe_fact_ref_provenance(tmp_path):
